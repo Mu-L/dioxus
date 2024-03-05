@@ -1,151 +1,251 @@
+//! The typical TodoMVC app, implemented in Dioxus.
+
 use dioxus::prelude::*;
+use dioxus_elements::input_data::keyboard_types::Key;
+use std::collections::HashMap;
 
 fn main() {
-    dioxus::desktop::launch(app);
+    launch(app);
 }
 
-#[derive(PartialEq)]
-pub enum FilterState {
+#[derive(PartialEq, Eq, Clone, Copy)]
+enum FilterState {
     All,
     Active,
     Completed,
 }
 
-#[derive(Debug, PartialEq, Clone)]
-pub struct TodoItem {
-    pub id: u32,
-    pub checked: bool,
-    pub contents: String,
+#[derive(Debug, PartialEq, Eq)]
+struct TodoItem {
+    id: u32,
+    checked: bool,
+    contents: String,
 }
 
-pub fn app(cx: Scope<()>) -> Element {
-    let (todos, set_todos) = use_state(&cx, im_rc::HashMap::<u32, TodoItem>::default);
-    let (filter, set_filter) = use_state(&cx, || FilterState::All);
-    let (draft, set_draft) = use_state(&cx, || "".to_string());
-    let (todo_id, set_todo_id) = use_state(&cx, || 0);
+fn app() -> Element {
+    // We store the todos in a HashMap in a Signal.
+    // Each key is the id of the todo, and the value is the todo itself.
+    let mut todos = use_signal(HashMap::<u32, TodoItem>::new);
 
-    // Filter the todos based on the filter state
-    let mut filtered_todos = todos
-        .iter()
-        .filter(|(_, item)| match filter {
-            FilterState::All => true,
-            FilterState::Active => !item.checked,
-            FilterState::Completed => item.checked,
-        })
-        .map(|f| *f.0)
-        .collect::<Vec<_>>();
-    filtered_todos.sort_unstable();
+    let filter = use_signal(|| FilterState::All);
 
-    let show_clear_completed = todos.values().any(|todo| todo.checked);
-    let items_left = filtered_todos.len();
-    let item_text = match items_left {
-        1 => "item",
-        _ => "items",
+    // We use a simple memoized signal to calculate the number of active todos.
+    // Whenever the todos change, the active_todo_count will be recalculated.
+    let active_todo_count =
+        use_memo(move || todos.read().values().filter(|item| !item.checked).count());
+
+    // We use a memoized signal to filter the todos based on the current filter state.
+    // Whenever the todos or filter change, the filtered_todos will be recalculated.
+    // Note that we're only storing the IDs of the todos, not the todos themselves.
+    let filtered_todos = use_memo(move || {
+        let mut filtered_todos = todos
+            .read()
+            .iter()
+            .filter(|(_, item)| match filter() {
+                FilterState::All => true,
+                FilterState::Active => !item.checked,
+                FilterState::Completed => item.checked,
+            })
+            .map(|f| *f.0)
+            .collect::<Vec<_>>();
+
+        filtered_todos.sort_unstable();
+
+        filtered_todos
+    });
+
+    // Toggle all the todos to the opposite of the current state.
+    // If all todos are checked, uncheck them all. If any are unchecked, check them all.
+    let toggle_all = move |_| {
+        let check = active_todo_count() != 0;
+        for (_, item) in todos.write().iter_mut() {
+            item.checked = check;
+        }
     };
 
-    cx.render(rsx!{
+    rsx! {
+        style { {include_str!("./assets/todomvc.css")} }
         section { class: "todoapp",
-            style { [include_str!("./assets/todomvc.css")] }
-            div {
-                header { class: "header",
-                    h1 {"todos"}
+            TodoHeader { todos }
+            section { class: "main",
+                if !todos.read().is_empty() {
                     input {
-                        class: "new-todo",
-                        placeholder: "What needs to be done?",
-                        value: "{draft}",
-                        autofocus: "true",
-                        oninput: move |evt| set_draft(evt.value.clone()),
-                        onkeydown: move |evt| {
-                            if evt.key == "Enter" && !draft.is_empty() {
-                                set_todos.make_mut().insert(
-                                    *todo_id,
-                                    TodoItem {
-                                        id: *todo_id,
-                                        checked: false,
-                                        contents: draft.clone(),
-                                    },
-                                );
-                                set_todo_id(todo_id + 1);
-                                set_draft("".to_string());
-                            }
-                        }
+                        id: "toggle-all",
+                        class: "toggle-all",
+                        r#type: "checkbox",
+                        onchange: toggle_all,
+                        checked: active_todo_count() == 0,
                     }
+                    label { r#for: "toggle-all" }
                 }
+
+                // Render the todos using the filtered_todos signal
+                // We pass the ID into the TodoEntry component so it can access the todo from the todos signal.
+                // Since we store the todos in a signal too, we also need to send down the todo list
                 ul { class: "todo-list",
-                    filtered_todos.iter().map(|id| rsx!(todo_entry( key: "{id}", id: *id, set_todos: set_todos  )))
-                }
-                (!todos.is_empty()).then(|| rsx!(
-                    footer { class: "footer",
-                        span { class: "todo-count",
-                            strong {"{items_left} "}
-                            span {"{item_text} left"}
-                        }
-                        ul { class: "filters",
-                            li { class: "All", a { onclick: move |_| set_filter(FilterState::All), "All" }}
-                            li { class: "Active", a { onclick: move |_| set_filter(FilterState::Active), "Active" }}
-                            li { class: "Completed", a { onclick: move |_| set_filter(FilterState::Completed), "Completed" }}
-                        }
-                        (show_clear_completed).then(|| rsx!(
-                            button {
-                                class: "clear-completed",
-                                onclick: move |_| set_todos.make_mut().retain(|_, todo| !todo.checked),
-                                "Clear completed"
-                            }
-                        ))
+                    for id in filtered_todos() {
+                        TodoEntry { key: "{id}", id, todos }
                     }
-                ))
+                }
+
+                // We only show the footer if there are todos.
+                if !todos.read().is_empty() {
+                    ListFooter { active_todo_count, todos, filter }
+                }
             }
         }
+
+        // A simple info footer
         footer { class: "info",
-            p {"Double-click to edit a todo"}
-            p { "Created by ", a {  href: "http://github.com/jkelleyrtp/", "jkelleyrtp" }}
-            p { "Part of ", a { href: "http://todomvc.com", "TodoMVC" }}
+            p { "Double-click to edit a todo" }
+            p { "Created by " a { href: "http://github.com/jkelleyrtp/", "jkelleyrtp" } }
+            p { "Part of " a { href: "http://todomvc.com", "TodoMVC" } }
         }
-    })
+    }
 }
 
-#[derive(Props)]
-pub struct TodoEntryProps<'a> {
-    set_todos: &'a UseState<im_rc::HashMap<u32, TodoItem>>,
-    id: u32,
+#[component]
+fn TodoHeader(mut todos: Signal<HashMap<u32, TodoItem>>) -> Element {
+    let mut draft = use_signal(|| "".to_string());
+    let mut todo_id = use_signal(|| 0);
+
+    let onkeydown = move |evt: KeyboardEvent| {
+        if evt.key() == Key::Enter && !draft.read().is_empty() {
+            let id = todo_id();
+            let todo = TodoItem {
+                id,
+                checked: false,
+                contents: draft.to_string(),
+            };
+            todos.write().insert(id, todo);
+            todo_id += 1;
+            draft.set("".to_string());
+        }
+    };
+
+    rsx! {
+        header { class: "header",
+            h1 { "todos" }
+            input {
+                class: "new-todo",
+                placeholder: "What needs to be done?",
+                value: "{draft}",
+                autofocus: "true",
+                oninput: move |evt| draft.set(evt.value().clone()),
+                onkeydown,
+            }
+        }
+    }
 }
 
-pub fn todo_entry<'a>(cx: Scope<'a, TodoEntryProps<'a>>) -> Element {
-    let (is_editing, set_is_editing) = use_state(&cx, || false);
+/// A single todo entry
+/// This takes the ID of the todo and the todos signal as props
+/// We can use these together to memoize the todo contents and checked state
+#[component]
+fn TodoEntry(mut todos: Signal<HashMap<u32, TodoItem>>, id: u32) -> Element {
+    let mut is_editing = use_signal(|| false);
 
-    let todos = cx.props.set_todos.get();
-    let todo = &todos[&cx.props.id];
-    let completed = if todo.checked { "completed" } else { "" };
-    let editing = if *is_editing { "editing" } else { "" };
+    // To avoid re-rendering this component when the todo list changes, we isolate our reads to memos
+    // This way, the component will only re-render when the contents of the todo change, or when the editing state changes.
+    // This does involve taking a local clone of the todo contents, but it allows us to prevent this component from re-rendering
+    let checked = use_memo(move || todos.read().get(&id).unwrap().checked);
+    let contents = use_memo(move || todos.read().get(&id).unwrap().contents.clone());
 
-    rsx!(cx, li {
-        class: "{completed} {editing}",
-        div { class: "view",
-            input { class: "toggle", r#type: "checkbox", id: "cbg-{todo.id}", checked: "{todo.checked}",
-                onchange: move |evt| {
-                    cx.props.set_todos.make_mut()[&cx.props.id].checked = evt.value.parse().unwrap();
+    rsx! {
+        li {
+            // Dioxus lets you use if statements in rsx to conditionally render attributes
+            // These will get merged into a single class attribute
+            class: if checked() { "completed" },
+            class: if is_editing() { "editing" },
+
+            // Some basic controls for the todo
+            div { class: "view",
+                input {
+                    class: "toggle",
+                    r#type: "checkbox",
+                    id: "cbg-{id}",
+                    checked: "{checked}",
+                    oninput: move |evt| todos.write().get_mut(&id).unwrap().checked = evt.checked(),
+                }
+                label {
+                    r#for: "cbg-{id}",
+                    ondoubleclick: move |_| is_editing.set(true),
+                    prevent_default: "onclick",
+                    "{contents}"
+                }
+                button {
+                    class: "destroy",
+                    onclick: move |_| { todos.write().remove(&id); },
+                    prevent_default: "onclick"
                 }
             }
-            label {
-                r#for: "cbg-{todo.id}",
-                onclick: move |_| set_is_editing(true),
-                onfocusout: move |_| set_is_editing(false),
-                "{todo.contents}"
+
+            // Only render the actual input if we're editing
+            if is_editing() {
+                input {
+                    class: "edit",
+                    value: "{contents}",
+                    oninput: move |evt| todos.write().get_mut(&id).unwrap().contents = evt.value(),
+                    autofocus: "true",
+                    onfocusout: move |_| is_editing.set(false),
+                    onkeydown: move |evt| {
+                        match evt.key() {
+                            Key::Enter | Key::Escape | Key::Tab => is_editing.set(false),
+                            _ => {}
+                        }
+                    }
+                }
             }
         }
-        is_editing.then(|| rsx!{
-            input {
-                class: "edit",
-                value: "{todo.contents}",
-                oninput: move |evt| cx.props.set_todos.make_mut()[&cx.props.id].contents = evt.value.clone(),
-                autofocus: "true",
-                onkeydown: move |evt| {
-                    match evt.key.as_str() {
-                        "Enter" | "Escape" | "Tab" => set_is_editing(false),
-                        _ => {}
+    }
+}
+
+#[component]
+fn ListFooter(
+    mut todos: Signal<HashMap<u32, TodoItem>>,
+    active_todo_count: ReadOnlySignal<usize>,
+    mut filter: Signal<FilterState>,
+) -> Element {
+    // We use a memoized signal to calculate whether we should show the "Clear completed" button.
+    // This will recompute whenever the todos change, and if the value is true, the button will be shown.
+    let show_clear_completed = use_memo(move || todos.read().values().any(|todo| todo.checked));
+
+    rsx! {
+        footer { class: "footer",
+            span { class: "todo-count",
+                strong { "{active_todo_count} " }
+                span {
+                    match active_todo_count() {
+                        1 => "item",
+                        _ => "items",
                     }
-                },
+                    " left"
+                }
             }
-        })
-    })
+            ul { class: "filters",
+                for (state , state_text , url) in [
+                    (FilterState::All, "All", "#/"),
+                    (FilterState::Active, "Active", "#/active"),
+                    (FilterState::Completed, "Completed", "#/completed"),
+                ] {
+                    li {
+                        a {
+                            href: url,
+                            class: if filter() == state { "selected" },
+                            onclick: move |_| filter.set(state),
+                            prevent_default: "onclick",
+                            {state_text}
+                        }
+                    }
+                }
+            }
+            if show_clear_completed() {
+                button {
+                    class: "clear-completed",
+                    onclick: move |_| todos.write().retain(|_, todo| !todo.checked),
+                    "Clear completed"
+                }
+            }
+        }
+    }
 }

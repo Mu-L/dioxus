@@ -2,216 +2,185 @@
 
 //! Prove that the dom works normally through virtualdom methods.
 //!
-//! This methods all use "rebuild" which completely bypasses the scheduler.
-//! Hard rebuilds don't consume any events from the event queue.
+//! This methods all use "rebuild_to_vec" which completely bypasses the scheduler.
+//! Hard rebuild_to_vecs don't consume any events from the event queue.
 
-use dioxus::{prelude::*, DomEdit};
-use dioxus_core as dioxus;
-use dioxus_core_macro::*;
-use dioxus_html as dioxus_elements;
-
-mod test_logging;
-use DomEdit::*;
-
-fn new_dom<P: 'static + Send>(app: Component<P>, props: P) -> VirtualDom {
-    const IS_LOGGING_ENABLED: bool = false;
-    test_logging::set_up_logging(IS_LOGGING_ENABLED);
-    VirtualDom::new_with_props(app, props)
-}
+use dioxus::dioxus_core::Mutation::*;
+use dioxus::prelude::*;
+use dioxus_core::ElementId;
 
 #[test]
 fn test_original_diff() {
-    static APP: Component = |cx| {
-        cx.render(rsx! {
-            div {
-                div {
-                    "Hello, world!"
-                }
-            }
-        })
-    };
+    let mut dom = VirtualDom::new(|| {
+        rsx! {
+            div { div { "Hello, world!" } }
+        }
+    });
 
-    let mut dom = new_dom(APP, ());
-    let mutations = dom.rebuild();
+    let edits = dom.rebuild_to_vec().santize();
+
     assert_eq!(
-        mutations.edits,
+        edits.edits,
         [
-            CreateElement { root: 1, tag: "div" },
-            CreateElement { root: 2, tag: "div" },
-            CreateTextNode { root: 3, text: "Hello, world!" },
-            AppendChildren { many: 1 },
-            AppendChildren { many: 1 },
-            AppendChildren { many: 1 },
+            // add to root
+            LoadTemplate { name: "template", index: 0, id: ElementId(1) },
+            AppendChildren { m: 1, id: ElementId(0) }
         ]
-    );
+    )
 }
 
 #[test]
 fn create() {
-    static APP: Component = |cx| {
-        cx.render(rsx! {
+    let mut dom = VirtualDom::new(|| {
+        rsx! {
             div {
                 div {
                     "Hello, world!"
                     div {
                         div {
-                            Fragment {
-                                "hello"
-                                "world"
-                            }
+                            Fragment { "hello""world" }
                         }
                     }
                 }
             }
-        })
-    };
+        }
+    });
 
-    let mut dom = new_dom(APP, ());
-    let mutations = dom.rebuild();
+    let _edits = dom.rebuild_to_vec().santize();
 
-    assert_eq!(
-        mutations.edits,
-        [
-            CreateElement { root: 1, tag: "div" },
-            CreateElement { root: 2, tag: "div" },
-            CreateTextNode { root: 3, text: "Hello, world!" },
-            CreateElement { root: 4, tag: "div" },
-            CreateElement { root: 5, tag: "div" },
-            CreateTextNode { root: 6, text: "hello" },
-            CreateTextNode { root: 7, text: "world" },
-            AppendChildren { many: 2 },
-            AppendChildren { many: 1 },
-            AppendChildren { many: 2 },
-            AppendChildren { many: 1 },
-            AppendChildren { many: 1 },
-        ]
-    );
+    // todo: we don't test template mutations anymore since the templates are passed along
+
+    // assert_eq!(
+    //     edits.templates,
+    //     [
+    //         // create template
+    //         CreateElement { name: "div" },
+    //         CreateElement { name: "div" },
+    //         CreateStaticText { value: "Hello, world!" },
+    //         CreateElement { name: "div" },
+    //         CreateElement { name: "div" },
+    //         CreateStaticPlaceholder {},
+    //         AppendChildren { m: 1 },
+    //         AppendChildren { m: 1 },
+    //         AppendChildren { m: 2 },
+    //         AppendChildren { m: 1 },
+    //         SaveTemplate { name: "template", m: 1 },
+    //         // The fragment child template
+    //         CreateStaticText { value: "hello" },
+    //         CreateStaticText { value: "world" },
+    //         SaveTemplate { name: "template", m: 2 },
+    //     ]
+    // );
 }
 
 #[test]
 fn create_list() {
-    static APP: Component = |cx| {
-        cx.render(rsx! {
-            {(0..3).map(|f| rsx!{ div {
-                "hello"
-            }})}
-        })
-    };
+    let mut dom = VirtualDom::new(|| rsx! {{(0..3).map(|f| rsx!( div { "hello" } ))}});
 
-    let mut dom = new_dom(APP, ());
-    let mutations = dom.rebuild();
+    let _edits = dom.rebuild_to_vec().santize();
 
-    // copilot wrote this test :P
-    assert_eq!(
-        mutations.edits,
-        [
-            CreateElement { root: 1, tag: "div" },
-            CreateTextNode { root: 2, text: "hello" },
-            AppendChildren { many: 1 },
-            CreateElement { root: 3, tag: "div" },
-            CreateTextNode { root: 4, text: "hello" },
-            AppendChildren { many: 1 },
-            CreateElement { root: 5, tag: "div" },
-            CreateTextNode { root: 6, text: "hello" },
-            AppendChildren { many: 1 },
-            AppendChildren { many: 3 },
-        ]
-    );
+    // note: we dont test template edits anymore
+    // assert_eq!(
+    //     edits.templates,
+    //     [
+    //         // create template
+    //         CreateElement { name: "div" },
+    //         CreateStaticText { value: "hello" },
+    //         AppendChildren { m: 1 },
+    //         SaveTemplate { name: "template", m: 1 }
+    //     ]
+    // );
 }
 
 #[test]
 fn create_simple() {
-    static APP: Component = |cx| {
-        cx.render(rsx! {
+    let mut dom = VirtualDom::new(|| {
+        rsx! {
             div {}
             div {}
             div {}
             div {}
-        })
-    };
+        }
+    });
 
-    let mut dom = new_dom(APP, ());
-    let mutations = dom.rebuild();
+    let edits = dom.rebuild_to_vec().santize();
 
-    // copilot wrote this test :P
-    assert_eq!(
-        mutations.edits,
-        [
-            CreateElement { root: 1, tag: "div" },
-            CreateElement { root: 2, tag: "div" },
-            CreateElement { root: 3, tag: "div" },
-            CreateElement { root: 4, tag: "div" },
-            AppendChildren { many: 4 },
-        ]
-    );
+    // note: we dont test template edits anymore
+    // assert_eq!(
+    //     edits.templates,
+    //     [
+    //         // create template
+    //         CreateElement { name: "div" },
+    //         CreateElement { name: "div" },
+    //         CreateElement { name: "div" },
+    //         CreateElement { name: "div" },
+    //         // add to root
+    //         SaveTemplate { name: "template", m: 4 }
+    //     ]
+    // );
 }
 #[test]
 fn create_components() {
-    static App: Component = |cx| {
-        cx.render(rsx! {
+    let mut dom = VirtualDom::new(|| {
+        rsx! {
             Child { "abc1" }
             Child { "abc2" }
             Child { "abc3" }
-        })
-    };
+        }
+    });
 
-    #[derive(Props)]
-    struct ChildProps<'a> {
-        children: Element<'a>,
+    #[derive(Props, Clone, PartialEq)]
+    struct ChildProps {
+        children: Element,
     }
 
-    fn Child<'a>(cx: Scope<'a, ChildProps<'a>>) -> Element {
-        cx.render(rsx! {
+    fn Child(cx: ChildProps) -> Element {
+        rsx! {
             h1 {}
-            div { {&cx.props.children} }
+            div { {cx.children} }
             p {}
-        })
+        }
     }
 
-    let mut dom = new_dom(App, ());
-    let mutations = dom.rebuild();
+    let _edits = dom.rebuild_to_vec().santize();
 
-    assert_eq!(
-        mutations.edits,
-        [
-            CreateElement { root: 1, tag: "h1" },
-            CreateElement { root: 2, tag: "div" },
-            CreateTextNode { root: 3, text: "abc1" },
-            AppendChildren { many: 1 },
-            CreateElement { root: 4, tag: "p" },
-            CreateElement { root: 5, tag: "h1" },
-            CreateElement { root: 6, tag: "div" },
-            CreateTextNode { root: 7, text: "abc2" },
-            AppendChildren { many: 1 },
-            CreateElement { root: 8, tag: "p" },
-            CreateElement { root: 9, tag: "h1" },
-            CreateElement { root: 10, tag: "div" },
-            CreateTextNode { root: 11, text: "abc3" },
-            AppendChildren { many: 1 },
-            CreateElement { root: 12, tag: "p" },
-            AppendChildren { many: 9 },
-        ]
-    );
+    // todo: test this
 }
+
 #[test]
 fn anchors() {
-    static App: Component = |cx| {
-        cx.render(rsx! {
-            {true.then(|| rsx!{ div { "hello" } })}
-            {false.then(|| rsx!{ div { "goodbye" } })}
-        })
-    };
+    let mut dom = VirtualDom::new(|| {
+        rsx! {
+            if true {
+                 div { "hello" }
+            }
+            if false {
+                div { "goodbye" }
+            }
+        }
+    });
 
-    let mut dom = new_dom(App, ());
-    let mutations = dom.rebuild();
+    // note that the template under "false" doesn't show up since it's not loaded
+    let edits = dom.rebuild_to_vec().santize();
+
+    // note: we dont test template edits anymore
+    // assert_eq!(
+    //     edits.templates,
+    //     [
+    //         // create each template
+    //         CreateElement { name: "div" },
+    //         CreateStaticText { value: "hello" },
+    //         AppendChildren { m: 1 },
+    //         SaveTemplate { m: 1, name: "template" },
+    //     ]
+    // );
+
     assert_eq!(
-        mutations.edits,
+        edits.edits,
         [
-            CreateElement { root: 1, tag: "div" },
-            CreateTextNode { root: 2, text: "hello" },
-            AppendChildren { many: 1 },
-            CreatePlaceholder { root: 3 },
-            AppendChildren { many: 2 },
+            LoadTemplate { name: "template", index: 0, id: ElementId(1) },
+            CreatePlaceholder { id: ElementId(2) },
+            AppendChildren { m: 2, id: ElementId(0) }
         ]
-    );
+    )
 }

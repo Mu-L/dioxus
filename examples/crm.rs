@@ -1,119 +1,157 @@
-/*
-Tiny CRM: A port of the Yew CRM example to Dioxus.
-*/
+//! Tiny CRM - A simple CRM app using the Router component and global signals
+//!
+//! This shows how to use the `Router` component to manage different views in your app. It also shows how to use global
+//! signals to manage state across the entire app.
+//!
+//! We could simply pass the state as a prop to each component, but this is a good example of how to use global state
+//! in a way that works across pages.
+//!
+//! We implement a number of important details here too, like focusing inputs, handling form submits, navigating the router,
+//! platform-specific configuration, and importing 3rd party CSS libaries.
+
 use dioxus::prelude::*;
 
 fn main() {
-    dioxus::desktop::launch(app);
+    LaunchBuilder::new()
+        .with_cfg(desktop!({
+            use dioxus::desktop::{LogicalSize, WindowBuilder};
+            dioxus::desktop::Config::default()
+                .with_window(WindowBuilder::new().with_inner_size(LogicalSize::new(800, 600)))
+        }))
+        .launch(|| {
+            rsx! {
+                link {
+                    rel: "stylesheet",
+                    href: "https://unpkg.com/purecss@2.0.6/build/pure-min.css",
+                    integrity: "sha384-Uu6IeWbM+gzNVXJcM9XV3SohHtmWE+3VGi496jvgX1jyvDTXfdK+rfZc8C1Aehk5",
+                    crossorigin: "anonymous"
+                }
+                style { {include_str!("./assets/crm.css")} }
+                h1 { "Dioxus CRM Example" }
+                Router::<Route> {}
+            }
+        });
 }
-enum Scene {
-    ClientsList,
-    NewClientForm,
+
+/// We only have one list of clients for the whole app, so we can use a global signal.
+static CLIENTS: GlobalSignal<Vec<Client>> = Signal::global(Vec::new);
+
+struct Client {
+    first_name: String,
+    last_name: String,
+    description: String,
+}
+
+/// The pages of the app, each with a route
+#[derive(Routable, Clone)]
+enum Route {
+    #[route("/")]
+    List,
+
+    #[route("/new")]
+    New,
+
+    #[route("/settings")]
     Settings,
 }
 
-#[derive(Clone, Debug, Default)]
-pub struct Client {
-    pub first_name: String,
-    pub last_name: String,
-    pub description: String,
-}
-
-fn app(cx: Scope) -> Element {
-    let clients = use_ref(&cx, || vec![] as Vec<Client>);
-    let (scene, set_scene) = use_state(&cx, || Scene::ClientsList);
-    let (firstname, set_firstname) = use_state(&cx, String::new);
-    let (lastname, set_lastname) = use_state(&cx, String::new);
-    let (description, set_description) = use_state(&cx, String::new);
-
-    cx.render(rsx!(
-        body {
-            margin_left: "35%",
-            link {
-                rel: "stylesheet",
-                href: "https://unpkg.com/purecss@2.0.6/build/pure-min.css",
-                integrity: "sha384-Uu6IeWbM+gzNVXJcM9XV3SohHtmWE+3VGi496jvgX1jyvDTXfdK+rfZc8C1Aehk5",
-                crossorigin: "anonymous",
-            }
-
-            h1 {"Dioxus CRM Example"}
-
-            match scene {
-                Scene::ClientsList => rsx!(
-                    div { class: "crm",
-                        h2 { margin_bottom: "10px", "List of clients" }
-                        div { class: "clients", margin_left: "10px",
-                            clients.read().iter().map(|client| rsx!(
-                                div { class: "client", style: "margin-bottom: 50px",
-                                    p { "First Name: {client.first_name}" }
-                                    p { "Last Name: {client.last_name}" }
-                                    p {"Description: {client.description}"}
-                                })
-                            )
-                        }
-                        button { class: "pure-button pure-button-primary", onclick: move |_| set_scene(Scene::NewClientForm), "Add New" }
-                        button { class: "pure-button", onclick: move |_| set_scene(Scene::Settings), "Settings" }
-                    }
-                ),
-                Scene::NewClientForm => rsx!(
-                    div { class: "crm",
-                        h2 { margin_bottom: "10px", "Add new client" }
-                        form { class: "pure-form",
-                            input {
-                                class: "new-client firstname",
-                                placeholder: "First name",
-                                value: "{firstname}",
-                                oninput: move |e| set_firstname(e.value.clone())
-                            }
-                            input {
-                                class: "new-client lastname",
-                                placeholder: "Last name",
-                                value: "{lastname}",
-                                oninput: move |e| set_lastname(e.value.clone())
-                            }
-                            textarea {
-                                class: "new-client description",
-                                placeholder: "Description",
-                                value: "{description}",
-                                oninput: move |e| set_description(e.value.clone())
-                            }
-                        }
-                        button {
-                            class: "pure-button pure-button-primary",
-                            onclick: move |_| {
-                                clients.write().push(Client {
-                                    description: (*description).clone(),
-                                    first_name: (*firstname).clone(),
-                                    last_name: (*lastname).clone(),
-                                });
-                                set_description(String::new());
-                                set_firstname(String::new());
-                                set_lastname(String::new());
-                            },
-                            "Add New"
-                        }
-                        button { class: "pure-button", onclick: move |_| set_scene(Scene::ClientsList),
-                            "Go Back"
-                        }
-                    }
-                ),
-                Scene::Settings => rsx!(
-                    div {
-                        h2 { margin_bottom: "10px", "Settings" }
-                        button {
-                            background: "rgb(202, 60, 60)",
-                            class: "pure-button pure-button-primary",
-                            onclick: move |_| clients.write().clear(),
-                            "Remove all clients"
-                        }
-                        button {
-                            class: "pure-button pure-button-primary",
-                            onclick: move |_| set_scene(Scene::ClientsList),
-                            "Go Back"
-                        }
-                    }
-                )
+#[component]
+fn List() -> Element {
+    rsx! {
+        h2 { "List of Clients" }
+        Link { to: Route::New, class: "pure-button pure-button-primary", "Add Client" }
+        Link { to: Route::Settings, class: "pure-button", "Settings" }
+        for client in CLIENTS.read().iter() {
+            div { class: "client", style: "margin-bottom: 50px",
+                p { "Name: {client.first_name} {client.last_name}" }
+                p { "Description: {client.description}" }
             }
         }
-    ))
+    }
+}
+
+#[component]
+fn New() -> Element {
+    let mut first_name = use_signal(String::new);
+    let mut last_name = use_signal(String::new);
+    let mut description = use_signal(String::new);
+
+    let submit_client = move |_| {
+        // Write the client
+        CLIENTS.write().push(Client {
+            first_name: first_name(),
+            last_name: last_name(),
+            description: description(),
+        });
+
+        // And then navigate back to the client list
+        router().push(Route::List);
+    };
+
+    rsx! {
+        h2 { "Add new Client" }
+        form { class: "pure-form pure-form-aligned", onsubmit: submit_client,
+            fieldset {
+                div { class: "pure-control-group",
+                    label { r#for: "first_name", "First Name" }
+                    input {
+                        id: "first_name",
+                        r#type: "text",
+                        placeholder: "First Name…",
+                        required: true,
+                        value: "{first_name}",
+                        oninput: move |e| first_name.set(e.value()),
+
+                        // when the form mounts, focus the first name input
+                        onmounted: move |e| async move {
+                            _ = e.set_focus(true).await;
+                        },
+                    }
+                }
+
+                div { class: "pure-control-group",
+                    label { r#for: "last_name", "Last Name" }
+                    input {
+                        id: "last_name",
+                        r#type: "text",
+                        placeholder: "Last Name…",
+                        required: true,
+                        value: "{last_name}",
+                        oninput: move |e| last_name.set(e.value())
+                    }
+                }
+
+                div { class: "pure-control-group",
+                    label { r#for: "description", "Description" }
+                    textarea {
+                        id: "description",
+                        placeholder: "Description…",
+                        value: "{description}",
+                        oninput: move |e| description.set(e.value())
+                    }
+                }
+
+                div { class: "pure-controls",
+                    button { r#type: "submit", class: "pure-button pure-button-primary", "Save" }
+                    Link { to: Route::List, class: "pure-button pure-button-primary red", "Cancel" }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn Settings() -> Element {
+    rsx! {
+        h2 { "Settings" }
+        button {
+            class: "pure-button pure-button-primary red",
+            onclick: move |_| {
+                CLIENTS.write().clear();
+                dioxus::router::router().push(Route::List);
+            },
+            "Remove all Clients"
+        }
+        Link { to: Route::List, class: "pure-button", "Go back" }
+    }
 }

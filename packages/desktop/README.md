@@ -1,156 +1,51 @@
-# Dioxus-Desktop
+# Dioxus Desktop (webview)
 
-This crate provides an ergonomic API for Dioxus to build desktop apps.
+[![Crates.io][crates-badge]][crates-url]
+[![MIT licensed][mit-badge]][mit-url]
+[![Build Status][actions-badge]][actions-url]
+[![Discord chat][discord-badge]][discord-url]
 
-```rust
-fn main() {
-    dioxus::desktop::launch(App)
-}
+[crates-badge]: https://img.shields.io/crates/v/dioxus-desktop.svg
+[crates-url]: https://crates.io/crates/dioxus-desktop
+[mit-badge]: https://img.shields.io/badge/license-MIT-blue.svg
+[mit-url]: https://github.com/dioxuslabs/dioxus/blob/master/LICENSE
+[actions-badge]: https://github.com/dioxuslabs/dioxus/actions/workflows/main.yml/badge.svg
+[actions-url]: https://github.com/dioxuslabs/dioxus/actions?query=workflow%3ACI+branch%3Amaster
+[discord-badge]: https://img.shields.io/discord/899851952891002890.svg?logo=discord&style=flat-square
+[discord-url]: https://discord.gg/XgGxMSkvUM
 
-static App: Component = |cx| {
-    let (count, set_count) = use_state(&cx, || 0);
+[Website](https://dioxuslabs.com) |
+[Guides](https://dioxuslabs.com/learn/0.4/) |
+[API Docs](https://docs.rs/dioxus-desktop/latest/dioxus_desktop) |
+[Chat](https://discord.gg/XgGxMSkvUM)
 
-    cx.render(rsx!(
-        WebviewWindow {
-            onclose: move |e| log::info!("save our counter state to disk"),
-            div {
-                h1 { "Dioxus Desktop Demo" }
-                p { "Count is {count}"}
-                button { onclick: move |_| count += 1}
-            }
-        }
-    ))
-}
-```
+## Overview
 
-Window management, system trays, notifications, and other desktop-related functionality is managed using the declarative Dioxus API, making it easy to add new features without having to jump through hoops.
+`dioxus-desktop` provides a webview-based desktop renderer for the Dioxus VirtualDom.
+
+This requires that webview is installed on the target system. WebView is installed by default on macOS and iOS devices, but might not come preinstalled on Windows or Linux devices. To fix these issues, follow the [instructions in the guide](guide-url).
+
+[guide-url]: https://dioxuslabs.com/learn/0.4/getting_started/desktop
 
 ## Features
-- Your rust code runs natively and under a Tokio runtime
-- Declarative application management (dedicated components for windows, models, handlers, task tray, etc)
-- Cross platform (runs on Mac, Linux, Windows, etc and mobile through the dioxus-mobile sub crate)
 
-## Managing Windows
-Managing windows is done by simply rendering content into a `WebviewWindow` component. 
+- Simple, one-line launch for desktop apps
+- Dioxus VirtualDom running on a native thread
+- Full HTML/CSS support via `wry` and `tao`
+- Exposed `window` and `Proxy` types from tao for direct window manipulation
+- Helpful hooks for accessing the window, WebView, and running javascript.
 
-```rust
-static App: Component = |cx| {
-    rsx!(cx, WebviewWindow { "hello world" } )
-}
-```
-This will create a new window with only the content "hello world". As this crate matures, we'll have new types of windows for different functionality.
+## Contributing
 
-## Managing Notifications 
-Notifications also use a declarative approach. Sending a notification has never been easier!
+- Report issues on our [issue tracker](https://github.com/dioxuslabs/dioxus/issues).
+- Join the discord and ask questions!
 
-The api has been somewhat modeled after https://github.com/mikaelbr/node-notifier
+## License
 
-```rust
-static Notifications: Component = |cx| {
-    cx.render(rsx!(
-        Notification {
-            title: "title"
-            subtitle: "subtitle"
-            message: "message"
-            sound: "Basso"
-            icon: "Terminal"
-            contentImage: "image.png"
-            open: "https://github.com"
-            wait: true,
-            timeout: 5,
-            closeLabel: "Cancel"
-            actions: ["send", "receive"]
-            dropdownLabel: "messaging"
-            reply: true
+This project is licensed under the [MIT license].
 
-            onclose: move |e| {}
-            onreply: move |e| {}
-            ondropdownselected: move |e| {}
-            ontimeout: move |e| {}
-            onerror: move |e| {}
-        }
-    ))
-}
+[mit license]: https://github.com/DioxusLabs/dioxus/blob/master/LICENSE-MIT
 
-```
-
-## App Tray
-Dioxus Desktop supports app trays, which can be built with native menu groups or with a custom window.
-
-```rust
-static Tray: Component = |cx| {
-    cx.render(rsx!(
-        GlobalTray {
-            MenuGroup {
-                MenuGroupItem { title: "New File", shortcut: "cmd+N", onclick: move |e| {} }
-                MenuGroupItem { title: "New Window", shortcut: "shift+cmd+N", onclick: move |e| {} }
-            }
-        }
-    ))
-};
-
-// using a builder
-static Tray: Component = |cx| {
-    let menu = MenuGroup::builder(cx)
-        .with_items([
-            MenuGroupItem::builder()
-                .title()
-                .shortcut()
-                .onclick(move |e| {}),
-            MenuGroupItem::builder()
-                .title()
-                .shortcut()
-                .onclick(move |e| {})
-        ]).build();
-
-    rsx!(cx, GlobalTray { rawmenu: menu })
-}
-
-// or with a custom window
-static Tray: Component = |cx| {
-    rsx!(cx, GlobalTray { div { "custom buttons here" } })
-};
-```
-
-## Menu Bar
-Declaring menus is convenient and cross-platform.
-
-```rust
-static Menu: Component = |cx| {
-    cx.render(rsx!(
-        MenuBarMajorItem { title: "File"
-            MenuGroup {
-                MenuGroupItem { title: "New File", shortcut: "cmd+N", onclick: move |e| {} }
-                MenuGroupItem { title: "New Window", shortcut: "shift+cmd+N", onclick: move |e| {} }
-            }            
-            MenuGroup {
-                MenuGroupList { 
-                    title: "Open Recent", shortcut: "cmd+N" 
-                    MenuGroup {
-                        (recent_items.iter().map(|file| rsx!(
-                            MenuGroupItem {
-                                onclick: move |_| open_file(file),
-                                title: "{file}"
-                            }
-                        )))
-                    }
-                }
-            }
-        }        
-    ))
-};
-```
-
-## Building, bundling, etc
-
-and then to create a native .app:
-
-```
-dioxus bundle --platform macOS
-```
-
-## Goals
-
-Because the host VirtualDOM is running in its own native process, native applications can unlock their full potential. Dioxus-Desktop is designed to be a 100% rust alternative to ElectronJS without the memory overhead or bloat of ElectronJS apps.
-
-By bridging the native process, desktop apps can access full multithreading power, peripheral support, hardware access, and native filesystem controls without the hassle of web technologies. Our goal with this desktop crate is to make it easy to ship both a web and native application, and quickly see large performance boosts without having to re-write the whole stack. As the dioxus ecosystem grows, we hope to see 3rd parties providing wrappers for storage, offline mode, etc that supports both web and native technologies.
+Unless you explicitly state otherwise, any contribution intentionally submitted
+for inclusion in Dioxus by you shall be licensed as MIT without any additional
+terms or conditions.

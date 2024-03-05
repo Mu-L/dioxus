@@ -1,9 +1,6 @@
-<div align="center">
-  <h1>Dioxus</h1>
-  <p>
-    <strong>Frontend that scales.</strong>
-  </p>
-</div>
+<p align="center">
+  <img src="./notes/header.svg">
+</p>
 
 <div align="center">
   <!-- Crates version -->
@@ -28,7 +25,7 @@
   </a>
 
   <!--Awesome -->
-  <a href="https://github.com/dioxuslabs/awesome-dioxus">
+  <a href="https://dioxuslabs.com/awesome">
     <img src="https://cdn.rawgit.com/sindresorhus/awesome/d7305f38d29fed78fa85652e3a63e154dd8e8829/media/badge.svg" alt="Awesome Page" />
   </a>
   <!-- Discord -->
@@ -37,169 +34,147 @@
   </a>
 </div>
 
-
-
 <div align="center">
   <h3>
     <a href="https://dioxuslabs.com"> Website </a>
     <span> | </span>
     <a href="https://github.com/DioxusLabs/example-projects"> Examples </a>
     <span> | </span>
-    <a href="https://dioxuslabs.com/guide"> Guide (0.1.8) </a>
+    <a href="https://dioxuslabs.com/learn/0.4/guide"> Guide </a>
     <span> | </span>
-    <a href="https://dioxuslabs.com/nightly/guide"> Guide (Master) </a>
-  </h3>
-</div>
-
-<div align="center">
-  <h4>
-    <a href="https://github.com/DioxusLabs/dioxus/blob/master/README.md"> English </a>
+    <a href="https://github.com/DioxusLabs/dioxus/blob/master/translations/zh-cn/README.md"> 中文 </a>
     <span> | </span>
-    <a href="https://github.com/DioxusLabs/dioxus/blob/master/notes/README/ZH_CN.md"> 中文 </a>
+    <a href="https://github.com/DioxusLabs/dioxus/blob/master/translations/pt-br/README.md"> PT-BR </a>
+    <span> | </span>
+    <a href="https://github.com/DioxusLabs/dioxus/blob/master/translations/ja-jp/README.md"> 日本語 </a>
   </h3>
 </div>
 
 <br/>
 
+> [!WARNING]
+> Dioxus 0.5 (currently in master) contains massive breaking changes and is not compatible with Dioxus 0.4
+
 Dioxus is a portable, performant, and ergonomic framework for building cross-platform user interfaces in Rust.
 
 ```rust
-fn app(cx: Scope) -> Element {
-    let (count, set_count) = use_state(&cx, || 0);
+fn app() -> Element {
+    let mut count = use_signal(|| 0);
 
-    cx.render(rsx!(
+    rsx! {
         h1 { "High-Five counter: {count}" }
-        button { onclick: move |_| set_count(count + 1), "Up high!" }
-        button { onclick: move |_| set_count(count - 1), "Down low!" }
-    ))
+        button { onclick: move |_| count += 1, "Up high!" }
+        button { onclick: move |_| count -= 1, "Down low!" }
+    }
 }
 ```
 
-Dioxus can be used to deliver webapps, desktop apps, static sites, liveview apps, mobile apps (WIP), and more. At its core, Dioxus is entirely renderer agnostic and has great documentation for creating new renderers for any platform.
+Dioxus can be used to deliver webapps, desktop apps, static sites, mobile apps, TUI apps, liveview apps, and more. Dioxus is entirely renderer agnostic and can be used as a platform for any renderer.
 
 If you know React, then you already know Dioxus.
 
-### Unique features:
+## Unique features:
 - Desktop apps running natively (no Electron!) in less than 10 lines of code.
 - Incredibly ergonomic and powerful state management.
 - Comprehensive inline documentation - hover and guides for all HTML elements, listeners, and events.
-- Extremely memory efficient - 0 global allocations for steady-state components.
-- Multi-channel asynchronous scheduler for first-class async support.
+- Blazingly fast 🔥🔥 and extremely memory efficient
+- Integrated hot reloading for fast iteration
+- First-class async support with coroutines and suspense
 - And more! Read the [full release post](https://dioxuslabs.com/blog/introducing-dioxus/).
 
-
-### Examples
-
-All examples in this repo are desktop apps. To run an example, simply clone this repo and use `cargo run --example XYZ`
-
-```
-cargo run --example EXAMPLE
-```
-
-## Get Started with...
-
-<table style="width:100%" align="center">
-    <tr >
-        <th><a href="https://dioxuslabs.com/guide/">Tutorial</a></th>
-        <th><a href="https://dioxuslabs.com/reference/web">Web</a></th>
-        <th><a href="https://dioxuslabs.com/reference/desktop/">Desktop</a></th>
-        <th><a href="https://dioxuslabs.com/reference/ssr/">SSR</a></th>
-        <th><a href="https://dioxuslabs.com/reference/mobile/">Mobile</a></th>
-        <th><a href="https://dioxuslabs.com/guide/concepts/managing_state.html">State</a></th>
+## Supported Platforms
+<div align="center">
+  <table style="width:100%">
     <tr>
-</table>
+      <td><em>Web</em></td>
+      <td>
+        <ul>
+          <li>Render directly to the DOM using WebAssembly</li>
+          <li>Pre-render with SSR and rehydrate on the client</li>
+          <li>Simple "hello world" at about 65kb, comparable to React</li>
+          <li>Built-in dev server and hot reloading for quick iteration</li>
+        </ul>
+      </td>
+    </tr>
+    <tr>
+      <td><em>Desktop</em></td>
+      <td>
+        <ul>
+          <li>Render using Webview or - experimentally - with WGPU or Skia </li>
+          <li>Zero-config setup. Simply cargo-run to build your app </li>
+          <li>Full support for native system access without electron-esque IPC </li>
+          <li>Supports macOS, Linux, and Windows. Portable <3mb binaries </li>
+        </ul>
+      </td>
+    </tr>
+    <tr>
+      <td><em>Mobile</em></td>
+      <td>
+        <ul>
+          <li>Render using Webview or - experimentally - with WGPU or Skia </li>
+          <li>Support for iOS and Android </li>
+          <li><em>Significantly</em> more performant than React Native </li>
+        </ul>
+      </td>
+    </tr>
+    <tr>
+      <td><em>Liveview</em></td>
+      <td>
+        <ul>
+          <li>Render apps - or just a single component - entirely on the server</li>
+          <li>Integrations with popular Rust frameworks like Axum and Warp</li>
+          <li>Extremely low-latency and ability to support 10,000+ simultaneous apps</li>
+        </ul>
+      </td>
+    </tr>
+    <tr>
+      <td><em>Terminal</em></td>
+      <td>
+        <ul>
+          <li>Render apps directly into your terminal, similar to <a href="https://github.com/vadimdemedes/ink"> ink.js</a></li>
+          <li>Powered by the familiar flexbox and CSS model of the browser</li>
+          <li>Built-in widgets like text input, buttons, and focus system</li>
+        </ul>
+      </td>
+    </tr>
+  </table>
+</div>
+
+## Why Dioxus?
+There's tons of options for building apps, so why would you choose Dioxus?
+
+Well, first and foremost, Dioxus prioritizes developer experience. This is reflected in a variety of features unique to Dioxus:
+
+- Autoformatting of our meta language (RSX) and accompanying VSCode extension
+- Hotreloading using an interpreter of RSX for both desktop and web
+- Emphasis on good docs - our guide is complete and our HTML elements are documented
+- Significant research in simplifying
+
+Dioxus is also a very extensible platform.
+
+- Easily build new renderers by implementing a very simple optimized stack-machine
+- Build and share components and even custom elements
+
+So... Dioxus is great, but why won't it work for me?
+- It's not fully mature yet. APIs are still shifting, things might break (though we try to avoid it)
+- You need to run in a no-std environment.
+- You don't like the React-hooks model of building UIs
 
 
-## Example Projects:
-
-| File Navigator (Desktop)                                                                                                                                                        | WiFi scanner (Desktop)                                                                                                                                                                 | TodoMVC (All platforms)                                                                                                                                                 | E-commerce w/ Tailwind (SSR/LiveView)                                                                                                                                                 |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [![File Explorer](https://github.com/DioxusLabs/example-projects/raw/master/file-explorer/image.png)](https://github.com/DioxusLabs/example-projects/blob/master/file-explorer) | [![Wifi Scanner Demo](https://github.com/DioxusLabs/example-projects/raw/master/wifi-scanner/demo_small.png)](https://github.com/DioxusLabs/example-projects/blob/master/wifi-scanner) | [![TodoMVC example](https://github.com/DioxusLabs/example-projects/raw/master/todomvc/example.png)](https://github.com/DioxusLabs/example-projects/blob/master/todomvc) | [![E-commerce Example](https://github.com/DioxusLabs/example-projects/raw/master/ecommerce-site/demo.png)](https://github.com/DioxusLabs/example-projects/blob/master/ecommerce-site) |
-
-
-See the [awesome-dioxus](https://github.com/DioxusLabs/awesome-dioxus) page for a curated list of content in the Dioxus Ecosystem.
+## Contributing
+- Check out the website [section on contributing](https://dioxuslabs.com/learn/0.4/contributing).
+- Report issues on our [issue tracker](https://github.com/dioxuslabs/dioxus/issues).
+- [Join](https://discord.gg/XgGxMSkvUM) the discord and ask questions!
 
 
-## Why Dioxus and why Rust?
-
-TypeScript is a fantastic addition to JavaScript, but it's still fundamentally JavaScript. TS code runs slightly slower, has tons of configuration options, and not every package is properly typed.
-
-In contrast, Dioxus is written in Rust - which is almost like "TypeScript on steroids".
-
-By using Rust, we gain:
-
-- Static types for *every* library
-- Immutability by default
-- A simple and intuitive module system
-- Integrated documentation (`go to source` _actually goes to source_)
-- Advanced pattern matching
-- Clean, efficient, composable iterators
-- Inline built-in unit/integration testing
-- Best-in-class error handling
-- Powerful and sane standard library
-- Flexible macro system
-- Access to `crates.io`
-
-Specifically, Dioxus provides us many other assurances:
-
-- Proper use of immutable data structures
-- Guaranteed error handling (so you can sleep easy at night not worrying about `cannot read property of undefined`)
-- Native performance on mobile
-- Direct access to system IO
-
-And much more. Dioxus makes Rust apps just as fast to write as React apps, but affords more robustness, giving your frontend team greater confidence in making big changes in shorter time.
-
-## Why NOT Dioxus?
-You shouldn't use Dioxus if:
-
-- You don't like the React Hooks approach to frontend
-- You need a no-std renderer
-- You want to support browsers where Wasm or asm.js are not supported.
-- You need a Send+Sync UI solution (Dioxus is not currently thread-safe)
-
-## Comparison with other Rust UI frameworks
-Dioxus primarily emphasizes **developer experience** and **familiarity with React principles**.
-
-- [Yew](https://github.com/yewstack/yew): prefers the elm pattern instead of React-hooks, no borrowed props, supports SSR (no hydration).
-- [Percy](https://github.com/chinedufn/percy): Supports SSR but with less emphasis on state management and event handling.
-- [Sycamore](https://github.com/sycamore-rs/sycamore): VDOM-less using fine-grained reactivity, but lacking in ergonomics.
-- [Dominator](https://github.com/Pauan/rust-dominator): Signal-based zero-cost alternative, less emphasis on community and docs.
-- [Azul](https://azul.rs): Fully native HTML/CSS renderer for desktop applications, no support for web/ssr
-
-
-## Parity with React & Roadmap
-
-Dioxus is heavily inspired by React, but we want your transition to feel like an upgrade. Dioxus is _most_ of the way there, but missing a few key features. These include:
-
-- Portals
-- Suspense integration with SSR
-- Server Components / Bundle Splitting / Lazy
-
-Dioxus is unique in the Rust ecosystem in that it supports:
-
-- Components with props that borrow from their parent
-- Server-side-rendering with client-side hydration
-- Support for desktop applications
-
-For more information on what features are currently available and the roadmap for the future, be sure to check out [the guide](https://dioxuslabs.com/guide/).
-
-## Projects in the ecosystem
-
-Want to jump in and help build the future of Rust frontend? There's plenty of places where your contributions can make a huge difference:
-
-- [TUI renderer](https://github.com/dioxusLabs/rink)
-- [CLI Tooling](https://github.com/dioxusLabs/cli)
-- [Documentation and Example Projects](https://github.com/dioxusLabs/docsite)
-- LiveView and Web Server
-- Asset System
+<a href="https://github.com/dioxuslabs/dioxus/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=dioxuslabs/dioxus&max=30&columns=10" />
+</a>
 
 ## License
-
 This project is licensed under the [MIT license].
 
-[MIT license]: https://github.com/dioxuslabs/dioxus/blob/master/LICENSE
-
-### Contribution
+[mit license]: https://github.com/DioxusLabs/dioxus/blob/master/LICENSE-MIT
 
 Unless you explicitly state otherwise, any contribution intentionally submitted
 for inclusion in Dioxus by you, shall be licensed as MIT, without any additional

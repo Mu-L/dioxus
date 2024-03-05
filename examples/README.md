@@ -1,187 +1,117 @@
 # Examples
 
-Most of these examples are run through webview so you don't need the Dioxus CLI installed to preview the functionality.
+These examples are fully-fledged mini Dioxus apps.
 
-These examples are fully-fledged micro apps. They can be ran with the `cargo run --example XYZ`
+You can run them with `cargo run --example EXAMPLE_NAME`. Example:
 
-| Example                                             | What it does                                | Status |
-| --------------------------------------------------- | ------------------------------------------- | ------ |
-| [The basics](./basics.rs)                           | A few basic examples to preview Dioxus      | 🛠      |
-| [fine grained reactivity](./signals.rs)             | Escape `diffing` by writing values directly | 🛠      |
-| [Global State Management](./statemanagement.rs)     | Share state between components              | 🛠      |
-| [Virtual Refs]()                                    | Cross-platform imperative elements          | 🛠      |
-| [Inline Styles](./inline-styles.rs)                 | Define styles for elements inline           | 🛠      |
-| [Conditional Rendering](./conditional-rendering.rs) | Hide/Show elements using conditionals       | ✅      |
-
-These examples are not necessarily meant to be run, but rather serve as a reference for the given functionality.
-
-| Example                                             | What it does                                    | Status |
-| --------------------------------------------------- | ----------------------------------------------- | ------ |
-| [The basics](./basics.rs)                           | A few basic examples to preview Dioxus          | 🛠      |
-| [fine grained reactivity](./signals.rs)             | Escape `diffing` by writing values directly     | 🛠      |
-| [Global State Management](./statemanagement.rs)     | Share state between components                  | 🛠      |
-| [Virtual Refs]()                                    | Cross-platform imperative elements              | 🛠      |
-| [Inline Styles](./inline-styles.rs)                 | Define styles for elements inline               | 🛠      |
-| [Conditional Rendering](./conditional-rendering.rs) | Hide/Show elements using conditionals           | ✅      |
-| [Maps/Iterators](./iterators.rs)                    | Use iterators in the rsx! macro                 | ✅      |
-| [Render To string](./tostring.rs)                   | Render a mounted virtualdom to a string         | 🛠      |
-| [Component Children](./children.rs)                 | Pass children into child components             | 🛠      |
-| [Function Driven children]()                        | Pass functions to make VNodes                   | 🛠      |
-| [Memoization & Borrowed Data](./memo.rs)            | Suppress renders, borrow from parents           | ✅      |
-| [Fragments](./fragments.rs)                         | Support root-less element groups                | ✅      |
-| [Null/None Components](./empty.rs)                  | Return nothing!                                 | 🛠      |
-| [Spread Pattern for props](./spreadpattern.rs)      | Manually specify and override props             | ✅      |
-| [Controlled Inputs](./controlled-inputs.rs)         | this does                                       | 🛠      |
-| [Custom Elements]()                                 | Define custom elements                          | 🛠      |
-| [Web Components]()                                  | Custom elements to interface with WebComponents | 🛠      |
-| [Testing And debugging]()                           | this does                                       | 🛠      |
-| [Asynchronous Data]()                               | Using suspense to wait for data                 | 🛠      |
-| [Fiber/Scheduled Rendering]()                       | this does                                       | 🛠      |
-| [CSS Compiled Styles]()                             | this does                                       | 🛠      |
-| [Anti-patterns](./antipatterns.rs)                  | A collection of discouraged patterns            | ✅      |
-| [Complete rsx reference](./rsx_usage.rs)            | A complete reference for all rsx! usage         | ✅      |
-| [Event Listeners](./listener.rs)                    | Attach closures to events on elements           | ✅      |
-
-
-## Show me some examples!
-
-In our collection of examples, guides, and tutorials, we have:
-- The book (an introductory course)
-- The guide (an in-depth analysis of everything in Dioxus)
-- The reference (a collection of examples with heavy documentation)
-- The general examples
-- The platform-specific examples (web, ssr, desktop, mobile, server)
-  
-Here's what a few common tasks look like in Dioxus:
-
-Nested components with children and internal state:
-```rust
-fn App(cx: Scope) -> Element {
-  cx.render(rsx!( Toggle { "Toggle me" } ))
-}
-
-#[derive(PartialEq, Props)]
-struct ToggleProps { children: Element }
-
-fn Toggle(cx: Scope<ToggleProps>) -> Element {
-  let mut toggled = use_state(&cx, || false);
-  cx.render(rsx!{
-    div {
-      &cx.props.children
-      button { onclick: move |_| toggled.set(true),
-        toggled.and_then(|| "On").or_else(|| "Off")
-      }
-    }
-  })
-}
+```shell
+cargo run --example hello_world
 ```
 
-Controlled inputs:
-```rust
-fn App(cx: Scope) -> Element {
-  let value = use_state(&cx, String::new);
-  cx.render(rsx!( 
-    input {
-      "type": "text",
-      value: "{value}",
-      oninput: move |evt| value.set(evt.value.clone())
-    }
-  ))
-}
-```
+(Most of these examples are run through webview, so you don't need the Dioxus CLI installed)
 
-Lists and Conditional rendering:
-```rust
-fn App(cx: Scope) -> Element {
-  let list = (0..10).map(|i| {
-    rsx!(li { key: "{i}", "Value: {i}" })
-  });
-  
-  let title = match list.len() {
-    0 => rsx!("Not enough"),
-    _ => rsx!("Plenty!"),
-  };
+## Basic Features
 
-  if should_show {
-    cx.render(rsx!( 
-      title,
-      ul { list } 
-    ))
-  } else {
-    None
-  }
-}
-```
+[hello_world](./hello_world.rs) - Most basic example
 
-Tiny components:
-```rust
-static App: Component = |cx| rsx!(cx, div {"hello world!"});
-```
+[readme](./readme.rs) - Counter example from the Readme
 
-Borrowed prop contents:
-```rust
-fn App(cx: Scope) -> Element {
-  let name = use_state(&cx, || String::from("example"));
-  rsx!(cx, Child { title: name.as_str() })
-}
+[custom_assets](./custom_assets.rs) - Include images
 
-#[derive(Props)]
-struct ChildProps<'a> { title: &'a str }
+[custom_html](./custom_html.rs) - Customize wrapper HTML
 
-fn Child(cx: Scope<ChildProps>) -> Element {
-  rsx!(cx, "Hello {cx.props.title}")
-}
-```
+[eval](./eval.rs) - Evaluate JS expressions
 
-Global State
-```rust
-struct GlobalState { name: String }
+### RSX
 
-fn App(cx: Scope) -> Element {
-  use_provide_shared_state(cx, || GlobalState { name: String::from("Toby") })
-  rsx!(cx, Leaf {})
-}
+[rsx_usage](./rsx_usage.rs) - Demo of all RSX features
 
-fn Leaf(cx: Scope) -> Element {
-  let state = use_consume_shared_state::<GlobalState>(cx)?;
-  rsx!(cx, "Hello {state.name}")
-}
-```
+[xss_safety](./xss_safety.rs) - You can include text without worrying about injections by default
 
-Router (inspired by Yew-Router)
-```rust
-#[derive(PartialEq, Clone,  Hash, Eq, Routable)]
-enum Route {
-  #[at("/")]
-  Home,
-  #[at("/post/{id}")]
-  Post(id)
-}
+### Props
 
-fn App(cx: Scope) -> Element {
-  let route = use_router(cx, Route::parse);
-  cx.render(rsx!(div {
-    match route {
-      Route::Home => rsx!( Home {} ),
-      Route::Post(id) => rsx!( Post { id: id })
-    }
-  }))  
-}
-```
+[optional_props](./optional_props.rs) - Optional props
 
-Suspense 
-```rust
-fn App(cx: Scope) -> Element {
-  let doggo = use_suspense(cx,
-    || async { reqwest::get("https://dog.ceo/api/breeds/image/random").await.unwrap().json::<Response>().await.unwrap() },
-    |response| cx.render(rsx!( img { src: "{response.message}" }))
-  );
-  
-  cx.render(rsx!{
-    div {
-      "One doggo coming right up:",
-      doggo
-    }
-  })
-}
-```
+### CSS
+
+[tailwind](./tailwind/) - You can use a library for styling
+
+## Input Handling
+
+[all_events](./all_events.rs) - Basic event handling demo
+
+[filedragdrop](./filedragdrop.rs) - Handle dropped files
+
+[form](./form.rs) - Handle form submission
+
+[inputs](./inputs.rs) - Input values
+
+[nested_listeners](./nested_listeners.rs) - Nested handlers and bubbling
+
+[textarea](textarea.rs) - Text area input
+
+### State Management
+
+### Async
+
+[login_form](./login_form.rs) - Login endpoint example
+
+[suspense](./suspense.rs) - Render placeholders while data is loading
+
+[tasks](./tasks.rs) - Continuously run future
+
+### SVG
+
+[svg](./svg.rs)
+
+## Server-side rendering
+
+[ssr](./ssr.rs) - Rendering RSX server-side
+
+[hydration](./hydration.rs) - Pre-rendering with hydration
+
+## Common Patterns
+
+[disabled](./disabled.rs) - Disable buttons conditionally
+
+[error_handle](./error_handle.rs) - Handle errors with early return
+
+## Routing
+
+[flat_router](./flat_router.rs) - Basic, flat route example
+
+[router](./router.rs) - Router example
+
+[link](./link.rs) - Internal, external and custom links
+
+## Platform Features
+
+[window_event](./window_event.rs) - Window decorations, fullscreen, minimization, etc.
+
+[window_zoom](./window_zoom.rs) – Zoom in or out
+
+## Example Apps
+
+[calculator](./calculator.rs) - Simple calculator
+
+[crm](./crm.rs) - Toy multi-page customer management app
+
+[dog_app](./dog_app.rs) - Accesses dog API
+
+[file_explorer](./file_explorer.rs) - File browser that uses `use_ref` to interact with the model
+
+[todomvc](./todomvc.rs) - Todo task list example
+
+# TODO
+Missing Features
+- Fine-grained reactivity
+- Refs - imperative handles to elements
+- Function-driven children: Pass functions to make VNodes
+
+Missing examples
+- Shared state
+- Root-less element groups
+- Custom elements
+- Component Children: Pass children into child components
+- Render To string: Render a mounted virtualdom to a string
+- Testing and Debugging

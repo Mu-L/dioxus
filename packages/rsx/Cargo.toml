@@ -1,0 +1,29 @@
+[package]
+name = "dioxus-rsx"
+version = { workspace = true }
+authors = ["Jonathan Kelley", "Evan Almloff"]
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Core functionality for Dioxus - a concurrent renderer-agnostic Virtual DOM for interactive user experiences"
+repository = "https://github.com/DioxusLabs/dioxus/"
+homepage = "https://dioxuslabs.com"
+documentation = "https://dioxuslabs.com"
+keywords = ["dom", "ui", "gui", "react"]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+proc-macro2 = { version = "1.0", features = ["span-locations"] }
+dioxus-core = { workspace = true, optional = true }
+syn = { version = "2.0", features = ["full", "extra-traits"] }
+quote = { version = "1.0" }
+serde = { version = "1.0", features = ["derive"], optional = true }
+internment = { version = "0.7.0", optional = true }
+krates = { version = "0.12.6", optional = true }
+tracing = { workspace = true }
+
+[features]
+default = ["html"]
+hot_reload = ["krates", "internment", "dioxus-core"]
+serde = ["dep:serde"]
+html = []

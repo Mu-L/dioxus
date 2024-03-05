@@ -1,806 +1,975 @@
-//! Virtual Node Support
-//!
-//! VNodes represent lazily-constructed VDom trees that support diffing and event handlers. These VNodes should be *very*
-//! cheap and *very* fast to construct - building a full tree should be quick.
-
+use crate::innerlude::VProps;
+use crate::{any_props::BoxedAnyProps, innerlude::ScopeState};
+use crate::{arena::ElementId, Element, Event};
 use crate::{
-    innerlude::{ComponentPtr, Element, Properties, Scope, ScopeId, ScopeState},
-    lazynodes::LazyNodes,
-    AnyEvent, Component,
+    innerlude::{ElementRef, EventHandler, MountId},
+    properties::ComponentFunction,
 };
-use bumpalo::{boxed::Box as BumpBox, Bump};
+use crate::{Properties, VirtualDom};
+use core::panic;
+use std::ops::Deref;
+use std::rc::Rc;
+use std::vec;
 use std::{
-    cell::{Cell, RefCell},
-    fmt::{Arguments, Debug, Formatter},
+    any::{Any, TypeId},
+    cell::Cell,
+    fmt::{Arguments, Debug},
 };
 
-/// A composable "VirtualNode" to declare a User Interface in the Dioxus VirtualDOM.
-///
-/// VNodes are designed to be lightweight and used with with a bump allocator. To create a VNode, you can use either of:
-///
-/// - the `rsx!` macro
-/// - the [`NodeFactory`] API
-pub enum VNode<'src> {
-    /// Text VNodes are simply bump-allocated (or static) string slices
-    ///
-    /// # Example
-    ///
-    /// ```rust, ignore
-    /// let mut vdom = VirtualDom::new();
-    /// let node = vdom.render_vnode(rsx!( "hello" ));
-    ///
-    /// if let VNode::Text(vtext) = node {
-    ///     assert_eq!(vtext.text, "hello");
-    ///     assert_eq!(vtext.dom_id.get(), None);
-    ///     assert_eq!(vtext.is_static, true);
-    /// }
-    /// ```
-    Text(&'src VText<'src>),
+pub type TemplateId = &'static str;
 
-    /// Element VNodes are VNodes that may contain attributes, listeners, a key, a tag, and children.
+/// The actual state of the component's most recent computation
+///
+/// Because Dioxus accepts components in the form of `async fn() -> Result<VNode>`, we need to support both
+/// sync and async versions.
+///
+/// Dioxus will do its best to immediately resolve any async components into a regular Element, but as an implementor
+/// you might need to handle the case where there's no node immediately ready.
+pub enum RenderReturn {
+    /// A currently-available element
+    Ready(VNode),
+
+    /// The component aborted rendering early. It might've thrown an error.
     ///
-    /// # Example
+    /// In its place we've produced a placeholder to locate its spot in the dom when it recovers.
+    Aborted(VNode),
+}
+
+impl Clone for RenderReturn {
+    fn clone(&self) -> Self {
+        match self {
+            RenderReturn::Ready(node) => RenderReturn::Ready(node.clone_mounted()),
+            RenderReturn::Aborted(node) => RenderReturn::Aborted(node.clone_mounted()),
+        }
+    }
+}
+
+impl Default for RenderReturn {
+    fn default() -> Self {
+        RenderReturn::Aborted(VNode::placeholder())
+    }
+}
+
+impl Deref for RenderReturn {
+    type Target = VNode;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            RenderReturn::Ready(node) | RenderReturn::Aborted(node) => node,
+        }
+    }
+}
+
+/// The information about the
+#[derive(Debug)]
+pub(crate) struct VNodeMount {
+    /// The parent of this node
+    pub parent: Option<ElementRef>,
+
+    /// A back link to the original node
+    pub node: VNode,
+
+    /// The IDs for the roots of this template - to be used when moving the template around and removing it from
+    /// the actual Dom
+    pub root_ids: Box<[ElementId]>,
+
+    /// The element in the DOM that each attribute is mounted to
+    pub(crate) mounted_attributes: Box<[ElementId]>,
+
+    /// For components: This is the ScopeId the component is mounted to
+    /// For other dynamic nodes: This is element in the DOM that each dynamic node is mounted to
+    pub(crate) mounted_dynamic_nodes: Box<[usize]>,
+}
+
+/// A reference to a template along with any context needed to hydrate it
+///
+/// The dynamic parts of the template are stored separately from the static parts. This allows faster diffing by skipping
+/// static parts of the template.
+#[derive(Debug)]
+pub struct VNodeInner {
+    /// The key given to the root of this template.
     ///
+    /// In fragments, this is the key of the first child. In other cases, it is the key of the root.
+    pub key: Option<String>,
+
+    /// The static nodes and static descriptor of the template
+    pub template: Cell<Template>,
+
+    /// The dynamic nodes in the template
+    pub dynamic_nodes: Box<[DynamicNode]>,
+
+    /// The dynamic attribute slots in the template
+    ///
+    /// This is a list of positions in the template where dynamic attributes can be inserted.
+    ///
+    /// The inner list *must* be in the format [static named attributes, remaining dynamically named attributes].
+    ///
+    /// For example:
     /// ```rust, ignore
-    /// let mut vdom = VirtualDom::new();
-    ///
-    /// let node = vdom.render_vnode(rsx!{
-    ///     div {
-    ///         key: "a",
-    ///         onclick: |e| log::info!("clicked"),
-    ///         hidden: "true",
-    ///         style: { background_color: "red" },
-    ///         "hello"
+    /// div {
+    ///     class: "{class}",
+    ///     ..attrs,
+    ///     p {
+    ///         color: "{color}",
     ///     }
-    /// });
-    ///
-    /// if let VNode::Element(velement) = node {
-    ///     assert_eq!(velement.tag_name, "div");
-    ///     assert_eq!(velement.namespace, None);
-    ///     assert_eq!(velement.key, Some("a"));
     /// }
     /// ```
-    Element(&'src VElement<'src>),
-
-    /// Fragment nodes may contain many VNodes without a single root.
     ///
-    /// # Example
-    ///
+    /// Would be represented as:
     /// ```rust, ignore
-    /// rsx!{
-    ///     a {}
-    ///     link {}
-    ///     style {}
-    ///     "asd"
-    ///     Example {}
-    /// }
+    /// [
+    ///     [class, every attribute in attrs sorted by name], // Slot 0 in the template
+    ///     [color], // Slot 1 in the template
+    /// ]
     /// ```
-    Fragment(&'src VFragment<'src>),
-
-    /// Component nodes represent a mounted component with props, children, and a key.
-    ///
-    /// # Example
-    ///
-    /// ```rust, ignore
-    /// fn Example(cx: Scope) -> Element {
-    ///     ...
-    /// }
-    ///
-    /// let mut vdom = VirtualDom::new();
-    ///
-    /// let node = vdom.render_vnode(rsx!( Example {} ));
-    ///
-    /// if let VNode::Component(vcomp) = node {
-    ///     assert_eq!(vcomp.user_fc, Example as *const ());
-    /// }
-    /// ```
-    Component(&'src VComponent<'src>),
-
-    /// Placeholders are a type of placeholder VNode used when fragments don't contain any children.
-    ///
-    /// Placeholders cannot be directly constructed via public APIs.
-    ///
-    /// # Example
-    ///
-    /// ```rust, ignore
-    /// let mut vdom = VirtualDom::new();
-    ///
-    /// let node = vdom.render_vnode(rsx!( Fragment {} ));
-    ///
-    /// if let VNode::Fragment(frag) = node {
-    ///     let root = &frag.children[0];
-    ///     assert_eq!(root, VNode::Anchor);
-    /// }
-    /// ```
-    Placeholder(&'src VPlaceholder),
+    pub dynamic_attrs: Box<[Box<[Attribute]>]>,
 }
 
-impl<'src> VNode<'src> {
-    /// Get the VNode's "key" used in the keyed diffing algorithm.
-    pub fn key(&self) -> Option<&'src str> {
-        match &self {
-            VNode::Element(el) => el.key,
-            VNode::Component(c) => c.key,
-            VNode::Fragment(f) => f.key,
-            VNode::Text(_t) => None,
-            VNode::Placeholder(_f) => None,
-        }
-    }
-
-    /// Get the ElementID of the mounted VNode.
-    ///
-    /// Panics if the mounted ID is None or if the VNode is not represented by a single Element.
-    pub fn mounted_id(&self) -> ElementId {
-        self.try_mounted_id().unwrap()
-    }
-
-    /// Try to get the ElementID of the mounted VNode.
-    ///
-    /// Returns None if the VNode is not mounted, or if the VNode cannot be presented by a mounted ID (Fragment/Component)
-    pub fn try_mounted_id(&self) -> Option<ElementId> {
-        match &self {
-            VNode::Text(el) => el.id.get(),
-            VNode::Element(el) => el.id.get(),
-            VNode::Placeholder(el) => el.id.get(),
-            VNode::Fragment(_) => None,
-            VNode::Component(_) => None,
-        }
-    }
-
-    // Create an "owned" version of the vnode.
-    pub fn decouple(&self) -> VNode<'src> {
-        match *self {
-            VNode::Text(t) => VNode::Text(t),
-            VNode::Element(e) => VNode::Element(e),
-            VNode::Component(c) => VNode::Component(c),
-            VNode::Placeholder(a) => VNode::Placeholder(a),
-            VNode::Fragment(f) => VNode::Fragment(f),
-        }
-    }
-}
-
-impl Debug for VNode<'_> {
-    fn fmt(&self, s: &mut Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
-        match &self {
-            VNode::Element(el) => s
-                .debug_struct("VNode::VElement")
-                .field("name", &el.tag)
-                .field("key", &el.key)
-                .field("attrs", &el.attributes)
-                .field("children", &el.children)
-                .field("id", &el.id)
-                .finish(),
-            VNode::Text(t) => write!(s, "VNode::VText {{ text: {} }}", t.text),
-            VNode::Placeholder(t) => write!(s, "VNode::VPlaceholder {{ id: {:?} }}", t.id),
-            VNode::Fragment(frag) => {
-                write!(s, "VNode::VFragment {{ children: {:?} }}", frag.children)
-            }
-            VNode::Component(comp) => s
-                .debug_struct("VNode::VComponent")
-                .field("name", &comp.fn_name)
-                .field("fnptr", &comp.user_fc)
-                .field("key", &comp.key)
-                .field("scope", &comp.scope)
-                .field("originator", &comp.originator)
-                .finish(),
-        }
-    }
-}
-
-/// An Element's unique identifier.
+/// A reference to a template along with any context needed to hydrate it
 ///
-/// `ElementId` is a `usize` that is unique across the entire VirtualDOM - but not unique across time. If a component is
-/// unmounted, then the `ElementId` will be reused for a new component.
-#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
-pub struct ElementId(pub usize);
-impl std::fmt::Display for ElementId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
+/// The dynamic parts of the template are stored separately from the static parts. This allows faster diffing by skipping
+/// static parts of the template.
+#[derive(Debug)]
+pub struct VNode {
+    vnode: Rc<VNodeInner>,
+
+    /// The mount information for this template
+    pub(crate) mount: Cell<MountId>,
+}
+
+impl Clone for VNode {
+    fn clone(&self) -> Self {
+        Self {
+            vnode: self.vnode.clone(),
+            mount: Default::default(),
+        }
     }
 }
 
-impl ElementId {
-    pub fn as_u64(self) -> u64 {
-        self.0 as u64
+impl PartialEq for VNode {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.vnode, &other.vnode)
     }
 }
 
-fn empty_cell() -> Cell<Option<ElementId>> {
-    Cell::new(None)
+impl Deref for VNode {
+    type Target = VNodeInner;
+
+    fn deref(&self) -> &Self::Target {
+        &self.vnode
+    }
 }
 
-/// A placeholder node only generated when Fragments don't have any children.
-pub struct VPlaceholder {
-    pub id: Cell<Option<ElementId>>,
-}
+impl VNode {
+    /// Clone the element while retaining the mount information of the node
+    pub(crate) fn clone_mounted(&self) -> Self {
+        Self {
+            vnode: self.vnode.clone(),
+            mount: self.mount.clone(),
+        }
+    }
 
-/// A bump-allocated string slice and metadata.
-pub struct VText<'src> {
-    pub text: &'src str,
-    pub id: Cell<Option<ElementId>>,
-    pub is_static: bool,
-}
+    /// Create a template with no nodes that will be skipped over during diffing
+    pub fn empty() -> Element {
+        Some(Self {
+            vnode: Rc::new(VNodeInner {
+                key: None,
+                dynamic_nodes: Box::new([]),
+                dynamic_attrs: Box::new([]),
+                template: Cell::new(Template {
+                    name: "packages/core/nodes.rs:180:0:0",
+                    roots: &[],
+                    node_paths: &[],
+                    attr_paths: &[],
+                }),
+            }),
+            mount: Default::default(),
+        })
+    }
 
-/// A list of VNodes with no single root.
-pub struct VFragment<'src> {
-    pub key: Option<&'src str>,
+    /// Create a template with a single placeholder node
+    pub fn placeholder() -> Self {
+        Self {
+            vnode: Rc::new(VNodeInner {
+                key: None,
+                dynamic_nodes: Box::new([DynamicNode::Placeholder(Default::default())]),
+                dynamic_attrs: Box::new([]),
+                template: Cell::new(Template {
+                    name: "packages/core/nodes.rs:198:0:0",
+                    roots: &[TemplateNode::Dynamic { id: 0 }],
+                    node_paths: &[&[]],
+                    attr_paths: &[],
+                }),
+            }),
+            mount: Default::default(),
+        }
+    }
 
-    /// Fragments can never have zero children. Enforced by NodeFactory.
+    /// Create a new VNode
+    pub fn new(
+        key: Option<String>,
+        template: Template,
+        dynamic_nodes: Box<[DynamicNode]>,
+        dynamic_attrs: Box<[Box<[Attribute]>]>,
+    ) -> Self {
+        Self {
+            vnode: Rc::new(VNodeInner {
+                key,
+                template: Cell::new(template),
+                dynamic_nodes,
+                dynamic_attrs,
+            }),
+            mount: Default::default(),
+        }
+    }
+
+    /// Load a dynamic root at the given index
     ///
-    /// You *can* make a fragment with no children, but it's not a valid fragment and your VDom will panic.
-    pub children: &'src [VNode<'src>],
+    /// Returns [`None`] if the root is actually a static node (Element/Text)
+    pub fn dynamic_root(&self, idx: usize) -> Option<&DynamicNode> {
+        match &self.template.get().roots[idx] {
+            TemplateNode::Element { .. } | TemplateNode::Text { text: _ } => None,
+            TemplateNode::Dynamic { id } | TemplateNode::DynamicText { id } => {
+                Some(&self.dynamic_nodes[*id])
+            }
+        }
+    }
+
+    /// Get the mounted id for a dynamic node index
+    pub fn mounted_dynamic_node(
+        &self,
+        dynamic_node_idx: usize,
+        dom: &VirtualDom,
+    ) -> Option<ElementId> {
+        let mount = self.mount.get().as_usize()?;
+
+        match &self.dynamic_nodes[dynamic_node_idx] {
+            DynamicNode::Text(_) | DynamicNode::Placeholder(_) => dom
+                .mounts
+                .get(mount)?
+                .mounted_dynamic_nodes
+                .get(dynamic_node_idx)
+                .map(|id| ElementId(*id)),
+            _ => None,
+        }
+    }
+
+    /// Get the mounted id for a root node index
+    pub fn mounted_root(&self, root_idx: usize, dom: &VirtualDom) -> Option<ElementId> {
+        let mount = self.mount.get().as_usize()?;
+
+        dom.mounts.get(mount)?.root_ids.get(root_idx).copied()
+    }
+
+    /// Get the mounted id for a dynamic attribute index
+    pub fn mounted_dynamic_attribute(
+        &self,
+        dynamic_attribute_idx: usize,
+        dom: &VirtualDom,
+    ) -> Option<ElementId> {
+        let mount = self.mount.get().as_usize()?;
+
+        dom.mounts
+            .get(mount)?
+            .mounted_attributes
+            .get(dynamic_attribute_idx)
+            .copied()
+    }
 }
 
-/// An element like a "div" with children, listeners, and attributes.
-pub struct VElement<'a> {
-    pub tag: &'static str,
-    pub namespace: Option<&'static str>,
-    pub key: Option<&'a str>,
-    pub id: Cell<Option<ElementId>>,
-    pub parent: Cell<Option<ElementId>>,
-    pub listeners: &'a [Listener<'a>],
-    pub attributes: &'a [Attribute<'a>],
-    pub children: &'a [VNode<'a>],
+/// A static layout of a UI tree that describes a set of dynamic and static nodes.
+///
+/// This is the core innovation in Dioxus. Most UIs are made of static nodes, yet participate in diffing like any
+/// dynamic node. This struct can be created at compile time. It promises that its name is unique, allow Dioxus to use
+/// its static description of the UI to skip immediately to the dynamic nodes during diffing.
+///
+/// For this to work properly, the [`Template::name`] *must* be unique across your entire project. This can be done via variety of
+/// ways, with the suggested approach being the unique code location (file, line, col, etc).
+#[cfg_attr(feature = "serialize", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, Copy, PartialEq, Hash, Eq, PartialOrd, Ord)]
+pub struct Template {
+    /// The name of the template. This must be unique across your entire program for template diffing to work properly
+    ///
+    /// If two templates have the same name, it's likely that Dioxus will panic when diffing.
+    #[cfg_attr(
+        feature = "serialize",
+        serde(deserialize_with = "deserialize_string_leaky")
+    )]
+    pub name: &'static str,
+
+    /// The list of template nodes that make up the template
+    ///
+    /// Unlike react, calls to `rsx!` can have multiple roots. This list supports that paradigm.
+    #[cfg_attr(feature = "serialize", serde(deserialize_with = "deserialize_leaky"))]
+    pub roots: &'static [TemplateNode],
+
+    /// The paths of each node relative to the root of the template.
+    ///
+    /// These will be one segment shorter than the path sent to the renderer since those paths are relative to the
+    /// topmost element, not the `roots` field.
+    #[cfg_attr(
+        feature = "serialize",
+        serde(deserialize_with = "deserialize_bytes_leaky")
+    )]
+    pub node_paths: &'static [&'static [u8]],
+
+    /// The paths of each dynamic attribute relative to the root of the template
+    ///
+    /// These will be one segment shorter than the path sent to the renderer since those paths are relative to the
+    /// topmost element, not the `roots` field.
+    #[cfg_attr(
+        feature = "serialize",
+        serde(deserialize_with = "deserialize_bytes_leaky")
+    )]
+    pub attr_paths: &'static [&'static [u8]],
 }
 
-impl Debug for VElement<'_> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("VElement")
-            .field("tag_name", &self.tag)
-            .field("namespace", &self.namespace)
-            .field("key", &self.key)
-            .field("id", &self.id)
-            .field("parent", &self.parent)
-            .field("listeners", &self.listeners.len())
-            .field("attributes", &self.attributes)
-            .field("children", &self.children)
+#[cfg(feature = "serialize")]
+fn deserialize_string_leaky<'a, 'de, D>(deserializer: D) -> Result<&'a str, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::Deserialize;
+
+    let deserialized = String::deserialize(deserializer)?;
+    Ok(&*Box::leak(deserialized.into_boxed_str()))
+}
+
+#[cfg(feature = "serialize")]
+fn deserialize_bytes_leaky<'a, 'de, D>(deserializer: D) -> Result<&'a [&'a [u8]], D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::Deserialize;
+
+    let deserialized = Vec::<Vec<u8>>::deserialize(deserializer)?;
+    let deserialized = deserialized
+        .into_iter()
+        .map(|v| &*Box::leak(v.into_boxed_slice()))
+        .collect::<Vec<_>>();
+    Ok(&*Box::leak(deserialized.into_boxed_slice()))
+}
+
+#[cfg(feature = "serialize")]
+fn deserialize_leaky<'a, 'de, T: serde::Deserialize<'de>, D>(
+    deserializer: D,
+) -> Result<&'a [T], D::Error>
+where
+    T: serde::Deserialize<'de>,
+    D: serde::Deserializer<'de>,
+{
+    use serde::Deserialize;
+
+    let deserialized = Box::<[T]>::deserialize(deserializer)?;
+    Ok(&*Box::leak(deserialized))
+}
+
+#[cfg(feature = "serialize")]
+fn deserialize_option_leaky<'a, 'de, D>(deserializer: D) -> Result<Option<&'static str>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::Deserialize;
+
+    let deserialized = Option::<String>::deserialize(deserializer)?;
+    Ok(deserialized.map(|deserialized| &*Box::leak(deserialized.into_boxed_str())))
+}
+
+impl Template {
+    /// Is this template worth caching at all, since it's completely runtime?
+    ///
+    /// There's no point in saving templates that are completely dynamic, since they'll be recreated every time anyway.
+    pub fn is_completely_dynamic(&self) -> bool {
+        use TemplateNode::*;
+        self.roots
+            .iter()
+            .all(|root| matches!(root, Dynamic { .. } | DynamicText { .. }))
+    }
+}
+
+/// A statically known node in a layout.
+///
+/// This can be created at compile time, saving the VirtualDom time when diffing the tree
+#[derive(Debug, Clone, Copy, PartialEq, Hash, Eq, PartialOrd, Ord)]
+#[cfg_attr(
+    feature = "serialize",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(tag = "type")
+)]
+pub enum TemplateNode {
+    /// An statically known element in the dom.
+    ///
+    /// In HTML this would be something like `<div id="123"> </div>`
+    Element {
+        /// The name of the element
+        ///
+        /// IE for a div, it would be the string "div"
+        tag: &'static str,
+
+        /// The namespace of the element
+        ///
+        /// In HTML, this would be a valid URI that defines a namespace for all elements below it
+        /// SVG is an example of this namespace
+        #[cfg_attr(
+            feature = "serialize",
+            serde(deserialize_with = "deserialize_option_leaky")
+        )]
+        namespace: Option<&'static str>,
+
+        /// A list of possibly dynamic attributes for this element
+        ///
+        /// An attribute on a DOM node, such as `id="my-thing"` or `href="https://example.com"`.
+        #[cfg_attr(feature = "serialize", serde(deserialize_with = "deserialize_leaky"))]
+        attrs: &'static [TemplateAttribute],
+
+        /// A list of template nodes that define another set of template nodes
+        #[cfg_attr(feature = "serialize", serde(deserialize_with = "deserialize_leaky"))]
+        children: &'static [TemplateNode],
+    },
+
+    /// This template node is just a piece of static text
+    Text {
+        /// The actual text
+        text: &'static str,
+    },
+
+    /// This template node is unknown, and needs to be created at runtime.
+    Dynamic {
+        /// The index of the dynamic node in the VNode's dynamic_nodes list
+        id: usize,
+    },
+
+    /// This template node is known to be some text, but needs to be created at runtime
+    ///
+    /// This is separate from the pure Dynamic variant for various optimizations
+    DynamicText {
+        /// The index of the dynamic node in the VNode's dynamic_nodes list
+        id: usize,
+    },
+}
+
+impl TemplateNode {
+    /// Try to load the dynamic node at the given index
+    pub fn dynamic_id(&self) -> Option<usize> {
+        use TemplateNode::*;
+        match self {
+            Dynamic { id } | DynamicText { id } => Some(*id),
+            _ => None,
+        }
+    }
+}
+
+/// A node created at runtime
+///
+/// This node's index in the DynamicNode list on VNode should match its repsective `Dynamic` index
+#[derive(Debug)]
+pub enum DynamicNode {
+    /// A component node
+    ///
+    /// Most of the time, Dioxus will actually know which component this is as compile time, but the props and
+    /// assigned scope are dynamic.
+    ///
+    /// The actual VComponent can be dynamic between two VNodes, though, allowing implementations to swap
+    /// the render function at runtime
+    Component(VComponent),
+
+    /// A text node
+    Text(VText),
+
+    /// A placeholder
+    ///
+    /// Used by suspense when a node isn't ready and by fragments that don't render anything
+    ///
+    /// In code, this is just an ElementId whose initial value is set to 0 upon creation
+    Placeholder(VPlaceholder),
+
+    /// A list of VNodes.
+    ///
+    /// Note that this is not a list of dynamic nodes. These must be VNodes and created through conditional rendering
+    /// or iterators.
+    Fragment(Vec<VNode>),
+}
+
+impl DynamicNode {
+    /// Convert any item that implements [`IntoDynNode`] into a [`DynamicNode`]
+    pub fn make_node<'c, I>(into: impl IntoDynNode<I> + 'c) -> DynamicNode {
+        into.into_dyn_node()
+    }
+}
+
+impl Default for DynamicNode {
+    fn default() -> Self {
+        Self::Placeholder(Default::default())
+    }
+}
+
+/// An instance of a child component
+pub struct VComponent {
+    /// The name of this component
+    pub name: &'static str,
+
+    /// The function pointer of the component, known at compile time
+    ///
+    /// It is possible that components get folded at compile time, so these shouldn't be really used as a key
+    pub(crate) render_fn: TypeId,
+
+    pub(crate) props: BoxedAnyProps,
+}
+
+impl VComponent {
+    /// Create a new [`VComponent`] variant
+    pub fn new<P, M: 'static>(
+        component: impl ComponentFunction<P, M>,
+        props: P,
+        fn_name: &'static str,
+    ) -> Self
+    where
+        P: Properties + 'static,
+    {
+        let render_fn = component.id();
+        let props = Box::new(VProps::new(
+            component,
+            <P as Properties>::memoize,
+            props,
+            fn_name,
+        ));
+
+        VComponent {
+            name: fn_name,
+            props,
+            render_fn,
+        }
+    }
+
+    /// Get the scope this node is mounted to if it's mounted
+    ///
+    /// This is useful for rendering nodes outside of the VirtualDom, such as in SSR
+    ///
+    /// Returns [`None`] if the node is not mounted
+    pub fn mounted_scope<'a>(
+        &self,
+        dynamic_node_index: usize,
+        vnode: &VNode,
+        dom: &'a VirtualDom,
+    ) -> Option<&'a ScopeState> {
+        let mount = vnode.mount.get().as_usize()?;
+
+        let scope_id = dom.mounts.get(mount)?.mounted_dynamic_nodes[dynamic_node_index];
+
+        dom.scopes.get(scope_id)
+    }
+}
+
+impl std::fmt::Debug for VComponent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VComponent")
+            .field("name", &self.name)
             .finish()
     }
 }
 
-/// A trait for any generic Dioxus Element.
-///
-/// This trait provides the ability to use custom elements in the `rsx!` macro.
-///
-/// ```rust, ignore
-/// struct my_element;
-///
-/// impl DioxusElement for my_element {
-///     const TAG_NAME: "my_element";
-///     const NAME_SPACE: None;
-/// }
-///
-/// let _ = rsx!{
-///     my_element {}
-/// };
-/// ```
-pub trait DioxusElement {
-    const TAG_NAME: &'static str;
-    const NAME_SPACE: Option<&'static str>;
-    #[inline]
-    fn tag_name(&self) -> &'static str {
-        Self::TAG_NAME
-    }
-    #[inline]
-    fn namespace(&self) -> Option<&'static str> {
-        Self::NAME_SPACE
+/// A text node
+#[derive(Clone, Debug)]
+pub struct VText {
+    /// The actual text itself
+    pub value: String,
+}
+
+impl VText {
+    /// Create a new VText
+    pub fn new(value: String) -> Self {
+        Self { value }
     }
 }
 
-/// An attribute on a DOM node, such as `id="my-thing"` or
-/// `href="https://example.com"`.
-#[derive(Clone, Debug)]
-pub struct Attribute<'a> {
+impl From<Arguments<'_>> for VText {
+    fn from(args: Arguments) -> Self {
+        Self::new(args.to_string())
+    }
+}
+
+/// A placeholder node, used by suspense and fragments
+#[derive(Clone, Debug, Default)]
+#[non_exhaustive]
+pub struct VPlaceholder {}
+
+/// An attribute of the TemplateNode, created at compile time
+#[derive(Debug, PartialEq, Hash, Eq, PartialOrd, Ord)]
+#[cfg_attr(
+    feature = "serialize",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(tag = "type")
+)]
+pub enum TemplateAttribute {
+    /// This attribute is entirely known at compile time, enabling
+    Static {
+        /// The name of this attribute.
+        ///
+        /// For example, the `href` attribute in `href="https://example.com"`, would have the name "href"
+        name: &'static str,
+
+        /// The value of this attribute, known at compile time
+        ///
+        /// Currently this only accepts &str, so values, even if they're known at compile time, are not known
+        value: &'static str,
+
+        /// The namespace of this attribute. Does not exist in the HTML spec
+        namespace: Option<&'static str>,
+    },
+
+    /// The attribute in this position is actually determined dynamically at runtime
+    ///
+    /// This is the index into the dynamic_attributes field on the container VNode
+    Dynamic {
+        /// The index
+        id: usize,
+    },
+}
+
+/// An attribute on a DOM node, such as `id="my-thing"` or `href="https://example.com"`
+#[derive(Debug, Clone, PartialEq)]
+pub struct Attribute {
+    /// The name of the attribute.
     pub name: &'static str,
 
-    pub value: &'a str,
+    /// The value of the attribute
+    pub value: AttributeValue,
 
-    pub is_static: bool,
-
-    pub is_volatile: bool,
-
-    // Doesn't exist in the html spec.
-    // Used in Dioxus to denote "style" tags.
+    /// The namespace of the attribute.
+    ///
+    /// Doesn’t exist in the html spec. Used in Dioxus to denote “style” tags and other attribute groups.
     pub namespace: Option<&'static str>,
+
+    /// An indication of we should always try and set the attribute. Used in controlled components to ensure changes are propagated
+    pub volatile: bool,
 }
 
-/// An event listener.
-/// IE onclick, onkeydown, etc
-pub struct Listener<'bump> {
-    /// The ID of the node that this listener is mounted to
-    /// Used to generate the event listener's ID on the DOM
-    pub mounted_node: Cell<Option<ElementId>>,
-
-    /// The type of event to listen for.
+impl Attribute {
+    /// Create a new [`Attribute`] from a name, value, namespace, and volatile bool
     ///
-    /// IE "click" - whatever the renderer needs to attach the listener by name.
-    pub event: &'static str,
-
-    /// The actual callback that the user specified
-    pub(crate) callback: InternalHandler<'bump>,
-}
-
-pub type InternalHandler<'bump> = &'bump RefCell<Option<InternalListenerCallback<'bump>>>;
-type InternalListenerCallback<'bump> = BumpBox<'bump, dyn FnMut(AnyEvent) + 'bump>;
-
-type ExternalListenerCallback<'bump, T> = BumpBox<'bump, dyn FnMut(T) + 'bump>;
-
-/// The callback type generated by the `rsx!` macro when an `on` field is specified for components.
-///
-/// This makes it possible to pass `move |evt| {}` style closures into components as property fields.
-///
-///
-/// # Example
-///
-/// ```rust, ignore
-///
-/// rsx!{
-///     MyComponent { onclick: move |evt| log::info!("clicked"), }
-/// }
-///
-/// #[derive(Props)]
-/// struct MyProps<'a> {
-///     onclick: EventHandler<'a, MouseEvent>,
-/// }
-///
-/// fn MyComponent(cx: Scope<'a, MyProps<'a>>) -> Element {
-///     cx.render(rsx!{
-///         button {
-///             onclick: move |evt| cx.props.onclick.call(evt),
-///         }
-///     })
-/// }
-///
-/// ```
-pub struct EventHandler<'bump, T = ()> {
-    pub callback: RefCell<Option<ExternalListenerCallback<'bump, T>>>,
-}
-
-impl<'a, T> Default for EventHandler<'a, T> {
-    fn default() -> Self {
-        Self {
-            callback: RefCell::new(None),
-        }
-    }
-}
-
-impl<T> EventHandler<'_, T> {
-    /// Call this event handler with the appropriate event type
-    pub fn call(&self, event: T) {
-        if let Some(callback) = self.callback.borrow_mut().as_mut() {
-            callback(event);
-        }
-    }
-
-    /// Forcibly drop the internal handler callback, releasing memory
-    pub fn release(&self) {
-        self.callback.replace(None);
-    }
-}
-
-/// Virtual Components for custom user-defined components
-/// Only supports the functional syntax
-pub struct VComponent<'src> {
-    pub key: Option<&'src str>,
-    pub originator: ScopeId,
-    pub scope: Cell<Option<ScopeId>>,
-    pub can_memoize: bool,
-    pub user_fc: ComponentPtr,
-    pub fn_name: &'static str,
-    pub props: RefCell<Option<Box<dyn AnyProps + 'src>>>,
-}
-
-pub(crate) struct VComponentProps<P> {
-    pub render_fn: Component<P>,
-    pub memo: unsafe fn(&P, &P) -> bool,
-    pub props: P,
-}
-
-pub trait AnyProps {
-    fn as_ptr(&self) -> *const ();
-    fn render<'a>(&'a self, bump: &'a ScopeState) -> Element<'a>;
-    unsafe fn memoize(&self, other: &dyn AnyProps) -> bool;
-}
-
-impl<P> AnyProps for VComponentProps<P> {
-    fn as_ptr(&self) -> *const () {
-        &self.props as *const _ as *const ()
-    }
-
-    // Safety:
-    // this will downcast the other ptr as our swallowed type!
-    // you *must* make this check *before* calling this method
-    // if your functions are not the same, then you will downcast a pointer into a different type (UB)
-    unsafe fn memoize(&self, other: &dyn AnyProps) -> bool {
-        let real_other: &P = &*(other.as_ptr() as *const _ as *const P);
-        let real_us: &P = &*(self.as_ptr() as *const _ as *const P);
-        (self.memo)(real_us, real_other)
-    }
-
-    fn render<'a>(&'a self, scope: &'a ScopeState) -> Element<'a> {
-        let props = unsafe { std::mem::transmute::<&P, &P>(&self.props) };
-        (self.render_fn)(Scope { scope, props })
-    }
-}
-
-/// This struct provides an ergonomic API to quickly build VNodes.
-///
-/// NodeFactory is used to build VNodes in the component's memory space.
-/// This struct adds metadata to the final VNode about listeners, attributes, and children
-#[derive(Copy, Clone)]
-pub struct NodeFactory<'a> {
-    pub(crate) scope: &'a ScopeState,
-    pub(crate) bump: &'a Bump,
-}
-
-impl<'a> NodeFactory<'a> {
-    pub fn new(scope: &'a ScopeState) -> NodeFactory<'a> {
-        NodeFactory {
-            scope,
-            bump: &scope.wip_frame().bump,
-        }
-    }
-
-    #[inline]
-    pub fn bump(&self) -> &'a bumpalo::Bump {
-        self.bump
-    }
-
-    /// Directly pass in text blocks without the need to use the format_args macro.
-    pub fn static_text(&self, text: &'static str) -> VNode<'a> {
-        VNode::Text(self.bump.alloc(VText {
-            id: empty_cell(),
-            text,
-            is_static: true,
-        }))
-    }
-
-    /// Parses a lazy text Arguments and returns a string and a flag indicating if the text is 'static
-    ///
-    /// Text that's static may be pointer compared, making it cheaper to diff
-    pub fn raw_text(&self, args: Arguments) -> (&'a str, bool) {
-        match args.as_str() {
-            Some(static_str) => (static_str, true),
-            None => {
-                use bumpalo::core_alloc::fmt::Write;
-                let mut str_buf = bumpalo::collections::String::new_in(self.bump);
-                str_buf.write_fmt(args).unwrap();
-                (str_buf.into_bump_str(), false)
-            }
-        }
-    }
-
-    /// Create some text that's allocated along with the other vnodes
-    ///
-    pub fn text(&self, args: Arguments) -> VNode<'a> {
-        let (text, is_static) = self.raw_text(args);
-
-        VNode::Text(self.bump.alloc(VText {
-            text,
-            is_static,
-            id: empty_cell(),
-        }))
-    }
-
-    pub fn element(
-        &self,
-        el: impl DioxusElement,
-        listeners: &'a [Listener<'a>],
-        attributes: &'a [Attribute<'a>],
-        children: &'a [VNode<'a>],
-        key: Option<Arguments>,
-    ) -> VNode<'a> {
-        self.raw_element(
-            el.tag_name(),
-            el.namespace(),
-            listeners,
-            attributes,
-            children,
-            key,
-        )
-    }
-
-    pub fn raw_element(
-        &self,
-        tag_name: &'static str,
-        namespace: Option<&'static str>,
-        listeners: &'a [Listener<'a>],
-        attributes: &'a [Attribute<'a>],
-        children: &'a [VNode<'a>],
-        key: Option<Arguments>,
-    ) -> VNode<'a> {
-        let key = key.map(|f| self.raw_text(f).0);
-
-        let mut items = self.scope.items.borrow_mut();
-        for listener in listeners {
-            let long_listener = unsafe { std::mem::transmute(listener) };
-            items.listeners.push(long_listener);
-        }
-
-        VNode::Element(self.bump.alloc(VElement {
-            tag: tag_name,
-            key,
-            namespace,
-            listeners,
-            attributes,
-            children,
-            id: empty_cell(),
-            parent: empty_cell(),
-        }))
-    }
-
-    pub fn attr(
-        &self,
+    /// "Volatile" referes to whether or not Dioxus should always override the value. This helps prevent the UI in
+    /// some renderers stay in sync with the VirtualDom's understanding of the world
+    pub fn new(
         name: &'static str,
-        val: Arguments,
+        value: impl IntoAttributeValue,
         namespace: Option<&'static str>,
-        is_volatile: bool,
-    ) -> Attribute<'a> {
-        let (value, is_static) = self.raw_text(val);
+        volatile: bool,
+    ) -> Attribute {
         Attribute {
             name,
-            value,
-            is_static,
             namespace,
-            is_volatile,
+            volatile,
+            value: value.into_value(),
         }
     }
+}
 
-    pub fn component<P>(
-        &self,
-        component: fn(Scope<'a, P>) -> Element,
-        props: P,
-        key: Option<Arguments>,
-        fn_name: &'static str,
-    ) -> VNode<'a>
-    where
-        P: Properties + 'a,
-    {
-        let vcomp = self.bump.alloc(VComponent {
-            key: key.map(|f| self.raw_text(f).0),
-            scope: Default::default(),
-            can_memoize: P::IS_STATIC,
-            user_fc: component as ComponentPtr,
-            originator: self.scope.scope_id(),
-            fn_name,
-            props: RefCell::new(Some(Box::new(VComponentProps {
-                // local_props: RefCell::new(Some(props)),
-                // heap_props: RefCell::new(None),
-                props,
-                memo: P::memoize, // smuggle the memoization function across borders
+/// Any of the built-in values that the Dioxus VirtualDom supports as dynamic attributes on elements
+///
+/// These are built-in to be faster during the diffing process. To use a custom value, use the [`AttributeValue::Any`]
+/// variant.
+pub enum AttributeValue {
+    /// Text attribute
+    Text(String),
 
-                // i'm sorry but I just need to bludgeon the lifetimes into place here
-                // this is safe because we're managing all lifetimes to originate from previous calls
-                // the intricacies of Rust's lifetime system make it difficult to properly express
-                // the transformation from this specific lifetime to the for<'a> lifetime
-                render_fn: unsafe { std::mem::transmute(component) },
-            }))),
-        });
+    /// A float
+    Float(f64),
 
-        if !P::IS_STATIC {
-            let vcomp = &*vcomp;
-            let vcomp = unsafe { std::mem::transmute(vcomp) };
-            self.scope.items.borrow_mut().borrowed_props.push(vcomp);
-        }
+    /// Signed integer
+    Int(i64),
 
-        VNode::Component(vcomp)
+    /// Boolean
+    Bool(bool),
+
+    /// A listener, like "onclick"
+    Listener(ListenerCb),
+
+    /// An arbitrary value that implements PartialEq and is static
+    Any(Box<dyn AnyValue>),
+
+    /// A "none" value, resulting in the removal of an attribute from the dom
+    None,
+}
+
+impl AttributeValue {
+    /// Create a new [`AttributeValue`] with the listener variant from a callback
+    ///
+    /// The callback must be confined to the lifetime of the ScopeState
+    pub fn listener<T: 'static>(mut callback: impl FnMut(Event<T>) + 'static) -> AttributeValue {
+        AttributeValue::Listener(EventHandler::new(move |event: Event<dyn Any>| {
+            let data = event.data.downcast::<T>().unwrap();
+            // if let Ok(data) = event.data.downcast::<T>() {
+            callback(Event {
+                propagates: event.propagates,
+                data,
+            });
+            // }
+        }))
     }
 
-    pub fn listener(self, event: &'static str, callback: InternalHandler<'a>) -> Listener<'a> {
-        Listener {
-            event,
-            mounted_node: Cell::new(None),
-            callback,
+    /// Create a new [`AttributeValue`] with a value that implements [`AnyValue`]
+    pub fn any_value<T: AnyValue>(value: T) -> AttributeValue {
+        AttributeValue::Any(Box::new(value))
+    }
+}
+
+pub type ListenerCb = EventHandler<Event<dyn Any>>;
+
+impl std::fmt::Debug for AttributeValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Text(arg0) => f.debug_tuple("Text").field(arg0).finish(),
+            Self::Float(arg0) => f.debug_tuple("Float").field(arg0).finish(),
+            Self::Int(arg0) => f.debug_tuple("Int").field(arg0).finish(),
+            Self::Bool(arg0) => f.debug_tuple("Bool").field(arg0).finish(),
+            Self::Listener(_) => f.debug_tuple("Listener").finish(),
+            Self::Any(_) => f.debug_tuple("Any").finish(),
+            Self::None => write!(f, "None"),
         }
     }
+}
 
-    pub fn fragment_root<'b, 'c>(
-        self,
-        node_iter: impl IntoIterator<Item = impl IntoVNode<'a> + 'c> + 'b,
-    ) -> VNode<'a> {
-        let mut nodes = bumpalo::collections::Vec::new_in(self.bump);
-
-        for node in node_iter {
-            nodes.push(node.into_vnode(self));
+impl PartialEq for AttributeValue {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Text(l0), Self::Text(r0)) => l0 == r0,
+            (Self::Float(l0), Self::Float(r0)) => l0 == r0,
+            (Self::Int(l0), Self::Int(r0)) => l0 == r0,
+            (Self::Bool(l0), Self::Bool(r0)) => l0 == r0,
+            (Self::Listener(_), Self::Listener(_)) => true,
+            (Self::Any(l0), Self::Any(r0)) => l0.as_ref().any_cmp(r0.as_ref()),
+            (Self::None, Self::None) => true,
+            _ => false,
         }
+    }
+}
 
-        if nodes.is_empty() {
-            VNode::Placeholder(self.bump.alloc(VPlaceholder { id: empty_cell() }))
+impl Clone for AttributeValue {
+    fn clone(&self) -> Self {
+        match self {
+            Self::Text(arg0) => Self::Text(arg0.clone()),
+            Self::Float(arg0) => Self::Float(*arg0),
+            Self::Int(arg0) => Self::Int(*arg0),
+            Self::Bool(arg0) => Self::Bool(*arg0),
+            Self::Listener(_) | Self::Any(_) => panic!("Cannot clone listener or any value"),
+            Self::None => Self::None,
+        }
+    }
+}
+
+#[doc(hidden)]
+pub trait AnyValue: 'static {
+    fn any_cmp(&self, other: &dyn AnyValue) -> bool;
+    fn as_any(&self) -> &dyn Any;
+    fn type_id(&self) -> TypeId {
+        self.as_any().type_id()
+    }
+}
+
+impl<T: Any + PartialEq + 'static> AnyValue for T {
+    fn any_cmp(&self, other: &dyn AnyValue) -> bool {
+        if let Some(other) = other.as_any().downcast_ref() {
+            self == other
         } else {
-            VNode::Fragment(self.bump.alloc(VFragment {
-                children: nodes.into_bump_slice(),
-                key: None,
-            }))
+            false
         }
     }
 
-    pub fn fragment_from_iter<'b, 'c>(
-        self,
-        node_iter: impl IntoIterator<Item = impl IntoVNode<'a> + 'c> + 'b,
-    ) -> VNode<'a> {
-        let mut nodes = bumpalo::collections::Vec::new_in(self.bump);
-
-        for node in node_iter {
-            nodes.push(node.into_vnode(self));
-        }
-
-        if nodes.is_empty() {
-            VNode::Placeholder(self.bump.alloc(VPlaceholder { id: empty_cell() }))
-        } else {
-            let children = nodes.into_bump_slice();
-
-            if cfg!(debug_assertions)
-                && children.len() > 1
-                && children.last().unwrap().key().is_none()
-            {
-                // todo: make the backtrace prettier or remove it altogether
-                log::error!(
-                    r#"
-                Warning: Each child in an array or iterator should have a unique "key" prop.
-                Not providing a key will lead to poor performance with lists.
-                See docs.rs/dioxus for more information.
-                -------------
-                {:?}
-                "#,
-                    backtrace::Backtrace::new()
-                );
-            }
-
-            VNode::Fragment(self.bump.alloc(VFragment {
-                children,
-                key: None,
-            }))
-        }
-    }
-
-    // this isn't quite feasible yet
-    // I think we need some form of interior mutability or state on nodefactory that stores which subtree was created
-    pub fn create_children(
-        self,
-        node_iter: impl IntoIterator<Item = impl IntoVNode<'a>>,
-    ) -> Element<'a> {
-        let mut nodes = bumpalo::collections::Vec::new_in(self.bump);
-
-        for node in node_iter {
-            nodes.push(node.into_vnode(self));
-        }
-
-        if nodes.is_empty() {
-            Some(VNode::Placeholder(
-                self.bump.alloc(VPlaceholder { id: empty_cell() }),
-            ))
-        } else {
-            let children = nodes.into_bump_slice();
-
-            Some(VNode::Fragment(self.bump.alloc(VFragment {
-                children,
-                key: None,
-            })))
-        }
-    }
-
-    pub fn event_handler<T>(self, f: impl FnMut(T) + 'a) -> EventHandler<'a, T> {
-        let handler: &mut dyn FnMut(T) = self.bump.alloc(f);
-        let caller = unsafe { BumpBox::from_raw(handler as *mut dyn FnMut(T)) };
-        let callback = RefCell::new(Some(caller));
-        EventHandler { callback }
-    }
-}
-
-impl Debug for NodeFactory<'_> {
-    fn fmt(&self, _: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        Ok(())
-    }
-}
-
-/// Trait implementations for use in the rsx! and html! macros.
-///
-/// ## Details
-///
-/// This section provides convenience methods and trait implementations for converting common structs into a format accepted
-/// by the macros.
-///
-/// All dynamic content in the macros must flow in through `fragment_from_iter`. Everything else must be statically layed out.
-/// We pipe basically everything through `fragment_from_iter`, so we expect a very specific type:
-/// ```rust, ignore
-/// impl IntoIterator<Item = impl IntoVNode<'a>>
-/// ```
-///
-/// As such, all node creation must go through the factory, which is only available in the component context.
-/// These strict requirements make it possible to manage lifetimes and state.
-pub trait IntoVNode<'a> {
-    fn into_vnode(self, cx: NodeFactory<'a>) -> VNode<'a>;
-}
-
-// For the case where a rendered VNode is passed into the rsx! macro through curly braces
-impl<'a> IntoIterator for VNode<'a> {
-    type Item = VNode<'a>;
-    type IntoIter = std::iter::Once<Self::Item>;
-    fn into_iter(self) -> Self::IntoIter {
-        std::iter::once(self)
-    }
-}
-
-// TODO: do we even need this? It almost seems better not to
-// // For the case where a rendered VNode is passed into the rsx! macro through curly braces
-impl<'a> IntoVNode<'a> for VNode<'a> {
-    fn into_vnode(self, _: NodeFactory<'a>) -> VNode<'a> {
+    fn as_any(&self) -> &dyn Any {
         self
     }
 }
 
-// Conveniently, we also support "null" (nothing) passed in
-impl IntoVNode<'_> for () {
-    fn into_vnode(self, cx: NodeFactory) -> VNode {
-        cx.fragment_from_iter(None as Option<VNode>)
+/// A trait that allows various items to be converted into a dynamic node for the rsx macro
+pub trait IntoDynNode<A = ()> {
+    /// Consume this item along with a scopestate and produce a DynamicNode
+    ///
+    /// You can use the bump alloactor of the scopestate to creat the dynamic node
+    fn into_dyn_node(self) -> DynamicNode;
+}
+
+impl IntoDynNode for () {
+    fn into_dyn_node(self) -> DynamicNode {
+        DynamicNode::default()
+    }
+}
+impl IntoDynNode for VNode {
+    fn into_dyn_node(self) -> DynamicNode {
+        DynamicNode::Fragment(vec![self])
     }
 }
 
-// Conveniently, we also support "None"
-impl IntoVNode<'_> for Option<()> {
-    fn into_vnode(self, cx: NodeFactory) -> VNode {
-        cx.fragment_from_iter(None as Option<VNode>)
+impl IntoDynNode for DynamicNode {
+    fn into_dyn_node(self) -> DynamicNode {
+        self
     }
 }
 
-impl<'a> IntoVNode<'a> for Option<VNode<'a>> {
-    fn into_vnode(self, cx: NodeFactory<'a>) -> VNode<'a> {
-        self.unwrap_or_else(|| cx.fragment_from_iter(None as Option<VNode>))
-    }
-}
-
-impl<'a> IntoVNode<'a> for Option<LazyNodes<'a, '_>> {
-    fn into_vnode(self, cx: NodeFactory<'a>) -> VNode<'a> {
+impl<T: IntoDynNode> IntoDynNode for Option<T> {
+    fn into_dyn_node(self) -> DynamicNode {
         match self {
-            Some(lazy) => lazy.call(cx),
-            None => VNode::Placeholder(cx.bump.alloc(VPlaceholder { id: empty_cell() })),
+            Some(val) => val.into_dyn_node(),
+            None => DynamicNode::default(),
         }
     }
 }
 
-impl<'a, 'b> IntoIterator for LazyNodes<'a, 'b> {
-    type Item = LazyNodes<'a, 'b>;
-    type IntoIter = std::iter::Once<Self::Item>;
-    fn into_iter(self) -> Self::IntoIter {
-        std::iter::once(self)
+impl IntoDynNode for &Element {
+    fn into_dyn_node(self) -> DynamicNode {
+        match self.as_ref() {
+            Some(val) => val.clone().into_dyn_node(),
+            _ => DynamicNode::default(),
+        }
     }
 }
 
-impl<'a, 'b> IntoVNode<'a> for LazyNodes<'a, 'b> {
-    fn into_vnode(self, cx: NodeFactory<'a>) -> VNode<'a> {
-        self.call(cx)
+impl IntoDynNode for &str {
+    fn into_dyn_node(self) -> DynamicNode {
+        DynamicNode::Text(VText {
+            value: self.to_string(),
+        })
     }
 }
 
-impl<'b> IntoVNode<'_> for &'b str {
-    fn into_vnode(self, cx: NodeFactory) -> VNode {
-        cx.text(format_args!("{}", self))
+impl IntoDynNode for String {
+    fn into_dyn_node(self) -> DynamicNode {
+        DynamicNode::Text(VText { value: self })
     }
 }
 
-impl IntoVNode<'_> for String {
-    fn into_vnode(self, cx: NodeFactory) -> VNode {
-        cx.text(format_args!("{}", self))
+impl IntoDynNode for Arguments<'_> {
+    fn into_dyn_node(self) -> DynamicNode {
+        DynamicNode::Text(VText {
+            value: self.to_string(),
+        })
     }
 }
 
-impl IntoVNode<'_> for Arguments<'_> {
-    fn into_vnode(self, cx: NodeFactory) -> VNode {
-        cx.text(self)
+impl IntoDynNode for &VNode {
+    fn into_dyn_node(self) -> DynamicNode {
+        DynamicNode::Fragment(vec![self.clone()])
     }
 }
 
-impl<'a> IntoVNode<'a> for &Option<VNode<'a>> {
-    fn into_vnode(self, cx: NodeFactory<'a>) -> VNode<'a> {
-        self.as_ref()
-            .map(|f| f.into_vnode(cx))
-            .unwrap_or_else(|| cx.fragment_from_iter(None as Option<VNode>))
+pub trait IntoVNode {
+    fn into_vnode(self) -> VNode;
+}
+impl IntoVNode for VNode {
+    fn into_vnode(self) -> VNode {
+        self
+    }
+}
+impl IntoVNode for &VNode {
+    fn into_vnode(self) -> VNode {
+        self.clone()
+    }
+}
+impl IntoVNode for Element {
+    fn into_vnode(self) -> VNode {
+        match self {
+            Some(val) => val.into_vnode(),
+            _ => VNode::empty().unwrap(),
+        }
+    }
+}
+impl IntoVNode for &Element {
+    fn into_vnode(self) -> VNode {
+        match self {
+            Some(val) => val.into_vnode(),
+            _ => VNode::empty().unwrap(),
+        }
     }
 }
 
-impl<'a> IntoVNode<'a> for &VNode<'a> {
-    fn into_vnode(self, _cx: NodeFactory<'a>) -> VNode<'a> {
-        // borrowed nodes are strange
-        self.decouple()
+// Note that we're using the E as a generic but this is never crafted anyways.
+pub struct FromNodeIterator;
+impl<T, I> IntoDynNode<FromNodeIterator> for T
+where
+    T: Iterator<Item = I>,
+    I: IntoVNode,
+{
+    fn into_dyn_node(self) -> DynamicNode {
+        let children: Vec<_> = self.into_iter().map(|node| node.into_vnode()).collect();
+
+        if children.is_empty() {
+            DynamicNode::default()
+        } else {
+            DynamicNode::Fragment(children)
+        }
     }
+}
+
+/// A value that can be converted into an attribute value
+pub trait IntoAttributeValue {
+    /// Convert into an attribute value
+    fn into_value(self) -> AttributeValue;
+}
+
+impl IntoAttributeValue for AttributeValue {
+    fn into_value(self) -> AttributeValue {
+        self
+    }
+}
+
+impl IntoAttributeValue for &str {
+    fn into_value(self) -> AttributeValue {
+        AttributeValue::Text(self.to_string())
+    }
+}
+
+impl IntoAttributeValue for String {
+    fn into_value(self) -> AttributeValue {
+        AttributeValue::Text(self)
+    }
+}
+
+impl IntoAttributeValue for f64 {
+    fn into_value(self) -> AttributeValue {
+        AttributeValue::Float(self)
+    }
+}
+
+impl IntoAttributeValue for i64 {
+    fn into_value(self) -> AttributeValue {
+        AttributeValue::Int(self)
+    }
+}
+
+impl IntoAttributeValue for bool {
+    fn into_value(self) -> AttributeValue {
+        AttributeValue::Bool(self)
+    }
+}
+
+impl IntoAttributeValue for Arguments<'_> {
+    fn into_value(self) -> AttributeValue {
+        AttributeValue::Text(self.to_string())
+    }
+}
+
+impl IntoAttributeValue for Box<dyn AnyValue> {
+    fn into_value(self) -> AttributeValue {
+        AttributeValue::Any(self)
+    }
+}
+
+impl<T: IntoAttributeValue> IntoAttributeValue for Option<T> {
+    fn into_value(self) -> AttributeValue {
+        match self {
+            Some(val) => val.into_value(),
+            None => AttributeValue::None,
+        }
+    }
+}
+
+/// A trait for anything that has a dynamic list of attributes
+pub trait HasAttributes {
+    /// Push an attribute onto the list of attributes
+    fn push_attribute(
+        self,
+        name: &'static str,
+        ns: Option<&'static str>,
+        attr: impl IntoAttributeValue,
+        volatile: bool,
+    ) -> Self;
 }

@@ -1,420 +1,196 @@
 #![allow(non_snake_case)]
-/*
-Stress Miri as much as possible.
 
-Prove that we don't leak memory and that our methods are safe.
+use std::rc::Rc;
 
-Specifically:
-- [ ] VirtualDom drops memory safely
-- [ ] Borrowed components don't expose invalid pointers
-- [ ] Async isn't busted
-*/
+use dioxus::prelude::*;
+use dioxus_core::NoOpMutations;
 
-use dioxus::{prelude::*, SchedulerMsg, ScopeId};
-use dioxus_core as dioxus;
-use dioxus_core_macro::*;
-use dioxus_html as dioxus_elements;
-
-mod test_logging;
-
-const IS_LOGGING_ENABLED: bool = false;
-
-fn new_dom<P: 'static + Send>(app: Component<P>, props: P) -> VirtualDom {
-    test_logging::set_up_logging(IS_LOGGING_ENABLED);
-    VirtualDom::new_with_props(app, props)
-}
-
-/// This test ensures that if a component aborts early, it is replaced with a placeholder.
-/// In debug, this should also toss a warning.
+/// This test checks that we should release all memory used by the virtualdom when it exits.
+///
+/// When miri runs, it'll let us know if we leaked or aliased.
 #[test]
 fn test_memory_leak() {
-    fn app(cx: Scope) -> Element {
-        let val = cx.use_hook(|_| 0);
+    fn app() -> Element {
+        let val = generation();
 
-        *val += 1;
+        spawn(async {});
 
-        if *val == 2 || *val == 4 {
-            return None;
+        if val == 2 || val == 4 {
+            return rsx!({});
         }
 
-        let name = cx.use_hook(|_| String::from("asd"));
+        let mut name = use_hook(|| String::from("numbers: "));
 
-        cx.render(rsx!(
+        name.push_str("123 ");
+
+        rsx!(
             div { "Hello, world!" }
-            child()
-            child()
-            child()
-            child()
-            child()
-            child()
-            borrowed_child(na: name)
-            borrowed_child(na: name)
-            borrowed_child(na: name)
-            borrowed_child(na: name)
-            borrowed_child(na: name)
-        ))
+            Child {}
+            Child {}
+            Child {}
+            Child {}
+            Child {}
+            Child {}
+            BorrowedChild { name: name.clone() }
+            BorrowedChild { name: name.clone() }
+            BorrowedChild { name: name.clone() }
+            BorrowedChild { name: name.clone() }
+            BorrowedChild { name: name.clone() }
+        )
     }
 
-    #[derive(Props)]
-    struct BorrowedProps<'a> {
-        na: &'a str,
+    #[derive(Props, Clone, PartialEq)]
+    struct BorrowedProps {
+        name: String,
     }
 
-    fn borrowed_child<'a>(cx: Scope<'a, BorrowedProps<'a>>) -> Element {
-        rsx!(cx, div {
-            "goodbye {cx.props.na}"
-            child()
-            child()
-        })
+    fn BorrowedChild(cx: BorrowedProps) -> Element {
+        rsx! {
+            div {
+                "goodbye {cx.name}"
+                Child {}
+                Child {}
+            }
+        }
     }
 
-    fn child(cx: Scope) -> Element {
-        rsx!(cx, div { "goodbye world" })
+    fn Child() -> Element {
+        rsx!( div { "goodbye world" } )
     }
 
-    let mut dom = new_dom(app, ());
+    let mut dom = VirtualDom::new(app);
 
-    dom.rebuild();
-    dom.hard_diff(ScopeId(0));
-    dom.hard_diff(ScopeId(0));
-    dom.hard_diff(ScopeId(0));
-    dom.hard_diff(ScopeId(0));
-    dom.hard_diff(ScopeId(0));
-    dom.hard_diff(ScopeId(0));
+    dom.rebuild(&mut dioxus_core::NoOpMutations);
+
+    for _ in 0..5 {
+        dom.mark_dirty(ScopeId::ROOT);
+        _ = dom.render_immediate_to_vec();
+    }
 }
 
 #[test]
 fn memo_works_properly() {
-    fn app(cx: Scope) -> Element {
-        let val = cx.use_hook(|_| 0);
+    fn app() -> Element {
+        let val = generation();
 
-        *val += 1;
-
-        if *val == 2 || *val == 4 {
+        if val == 2 || val == 4 {
             return None;
         }
 
-        let name = cx.use_hook(|_| String::from("asd"));
+        let name = use_hook(|| String::from("asd"));
 
-        cx.render(rsx!(
+        rsx!(
             div { "Hello, world! {name}" }
-            child(na: "asdfg".to_string() )
-        ))
+            Child { na: "asdfg".to_string() }
+        )
     }
 
-    #[derive(PartialEq, Props)]
+    #[derive(PartialEq, Clone, Props)]
     struct ChildProps {
         na: String,
     }
 
-    fn child(cx: Scope<ChildProps>) -> Element {
-        rsx!(cx, div { "goodbye world" })
+    fn Child(_props: ChildProps) -> Element {
+        rsx!( div { "goodbye world" } )
     }
 
-    let mut dom = new_dom(app, ());
+    let mut dom = VirtualDom::new(app);
 
-    dom.rebuild();
-    dom.hard_diff(ScopeId(0));
-    dom.hard_diff(ScopeId(0));
-    dom.hard_diff(ScopeId(0));
-    dom.hard_diff(ScopeId(0));
-    dom.hard_diff(ScopeId(0));
-    dom.hard_diff(ScopeId(0));
-    dom.hard_diff(ScopeId(0));
-}
-
-#[test]
-fn free_works_on_root_props() {
-    fn app(cx: Scope<Custom>) -> Element {
-        cx.render(rsx! {
-            child(a: "alpha")
-            child(a: "beta")
-            child(a: "gamma")
-            child(a: "delta")
-        })
-    }
-
-    #[derive(Props, PartialEq)]
-    struct ChildProps {
-        a: &'static str,
-    }
-
-    fn child(cx: Scope<ChildProps>) -> Element {
-        rsx!(cx, "child {cx.props.a}")
-    }
-
-    struct Custom {
-        val: String,
-    }
-
-    impl Drop for Custom {
-        fn drop(&mut self) {
-            dbg!("dropped! {}", &self.val);
-        }
-    }
-
-    let mut dom = new_dom(app, Custom { val: String::from("asd") });
-    dom.rebuild();
-}
-
-#[test]
-fn free_works_on_borrowed() {
-    fn app(cx: Scope) -> Element {
-        cx.render(rsx! {
-            child(a: "alpha", b: "asd".to_string())
-        })
-    }
-    #[derive(Props)]
-    struct ChildProps<'a> {
-        a: &'a str,
-        b: String,
-    }
-
-    fn child<'a>(cx: Scope<'a, ChildProps<'a>>) -> Element {
-        dbg!("rendering child");
-        rsx!(cx, "child {cx.props.a}, {cx.props.b}")
-    }
-
-    impl Drop for ChildProps<'_> {
-        fn drop(&mut self) {
-            dbg!("dropped child!");
-        }
-    }
-
-    let mut dom = new_dom(app, ());
-    let _ = dom.rebuild();
+    dom.rebuild(&mut dioxus_core::NoOpMutations);
 }
 
 #[test]
 fn free_works_on_root_hooks() {
     /*
-    On Drop, scopearena drops all the hook contents.
+    On Drop, scopearena drops all the hook contents. and props
     */
-
-    struct Droppable<T>(T);
-    impl<T> Drop for Droppable<T> {
-        fn drop(&mut self) {
-            dbg!("dropping droppable");
-        }
+    #[derive(PartialEq, Clone, Props)]
+    struct AppProps {
+        inner: Rc<String>,
     }
 
-    fn app(cx: Scope) -> Element {
-        let name = cx.use_hook(|_| Droppable(String::from("asd")));
-        rsx!(cx, div { "{name.0}" })
+    fn app(cx: AppProps) -> Element {
+        let name: AppProps = use_hook(|| cx.clone());
+        rsx!(child_component { inner: name.inner.clone() })
     }
 
-    let mut dom = new_dom(app, ());
-    let _ = dom.rebuild();
+    fn child_component(props: AppProps) -> Element {
+        rsx!( div { "{props.inner}" } )
+    }
+
+    let ptr = Rc::new("asdasd".to_string());
+    let mut dom = VirtualDom::new_with_props(app, AppProps { inner: ptr.clone() });
+    dom.rebuild(&mut dioxus_core::NoOpMutations);
+
+    // ptr gets cloned into props and then into the hook
+    assert_eq!(Rc::strong_count(&ptr), 5);
+
+    drop(dom);
+
+    assert_eq!(Rc::strong_count(&ptr), 1);
 }
 
 #[test]
-fn old_props_arent_stale() {
-    fn app(cx: Scope) -> Element {
-        dbg!("rendering parent");
-        let cnt = cx.use_hook(|_| 0);
-        *cnt += 1;
+fn supports_async() {
+    use std::time::Duration;
+    use tokio::time::sleep;
 
-        if *cnt == 1 {
-            rsx!(cx, div { child(a: "abcdef".to_string()) })
-        } else {
-            rsx!(cx, div { child(a: "abcdef".to_string()) })
-        }
-    }
+    fn app() -> Element {
+        let mut colors = use_signal(|| vec!["green", "blue", "red"]);
+        let mut padding = use_signal(|| 10);
 
-    #[derive(Props, PartialEq)]
-    struct ChildProps {
-        a: String,
-    }
-    fn child(cx: Scope<ChildProps>) -> Element {
-        dbg!("rendering child", &cx.props.a);
-        rsx!(cx, div { "child {cx.props.a}" })
-    }
-
-    let mut dom = new_dom(app, ());
-    let _ = dom.rebuild();
-
-    dom.handle_message(SchedulerMsg::Immediate(ScopeId(0)));
-    dom.work_with_deadline(|| false);
-
-    dom.handle_message(SchedulerMsg::Immediate(ScopeId(0)));
-    dom.work_with_deadline(|| false);
-
-    dom.handle_message(SchedulerMsg::Immediate(ScopeId(0)));
-    dom.work_with_deadline(|| false);
-
-    dbg!("forcing update to child");
-
-    dom.handle_message(SchedulerMsg::Immediate(ScopeId(1)));
-    dom.work_with_deadline(|| false);
-
-    dom.handle_message(SchedulerMsg::Immediate(ScopeId(1)));
-    dom.work_with_deadline(|| false);
-
-    dom.handle_message(SchedulerMsg::Immediate(ScopeId(1)));
-    dom.work_with_deadline(|| false);
-}
-
-#[test]
-fn basic() {
-    fn app(cx: Scope) -> Element {
-        rsx!(cx, div {
-            child(a: "abcdef".to_string())
-        })
-    }
-
-    #[derive(Props, PartialEq)]
-    struct ChildProps {
-        a: String,
-    }
-
-    fn child(cx: Scope<ChildProps>) -> Element {
-        dbg!("rendering child", &cx.props.a);
-        rsx!(cx, div { "child {cx.props.a}" })
-    }
-
-    let mut dom = new_dom(app, ());
-    let _ = dom.rebuild();
-
-    dom.handle_message(SchedulerMsg::Immediate(ScopeId(0)));
-    dom.work_with_deadline(|| false);
-
-    dom.handle_message(SchedulerMsg::Immediate(ScopeId(0)));
-    dom.work_with_deadline(|| false);
-}
-
-#[test]
-fn leak_thru_children() {
-    fn app(cx: Scope) -> Element {
-        cx.render(rsx! {
-            Child {
-                name: "asd".to_string(),
-            }
+        use_hook(|| {
+            spawn(async move {
+                loop {
+                    sleep(Duration::from_millis(1000)).await;
+                    colors.with_mut(|colors| colors.reverse());
+                }
+            })
         });
-        cx.render(rsx! {
-            div {}
-        })
-    }
 
-    #[inline_props]
-    fn Child(cx: Scope, name: String) -> Element {
-        rsx!(cx, div { "child {name}" })
-    }
+        use_hook(|| {
+            spawn(async move {
+                loop {
+                    sleep(Duration::from_millis(10)).await;
+                    padding.with_mut(|padding| {
+                        if *padding < 65 {
+                            *padding += 1;
+                        } else {
+                            *padding = 5;
+                        }
+                    });
+                }
+            })
+        });
 
-    let mut dom = new_dom(app, ());
-    let _ = dom.rebuild();
+        let colors = colors.read();
+        let big = colors[0];
+        let mid = colors[1];
+        let small = colors[2];
 
-    dom.handle_message(SchedulerMsg::Immediate(ScopeId(0)));
-    dom.work_with_deadline(|| false);
-
-    dom.handle_message(SchedulerMsg::Immediate(ScopeId(0)));
-    dom.work_with_deadline(|| false);
-}
-
-#[test]
-fn test_pass_thru() {
-    #[inline_props]
-    fn NavContainer<'a>(cx: Scope, children: Element<'a>) -> Element {
-        cx.render(rsx! {
-            header {
-                nav { children }
-            }
-        })
-    }
-
-    fn NavMenu(cx: Scope) -> Element {
-        rsx!(cx,
-            NavBrand {}
-            div {
-                NavStart {}
-                NavEnd {}
-            }
-        )
-    }
-
-    fn NavBrand(cx: Scope) -> Element {
-        rsx!(cx, div {})
-    }
-
-    fn NavStart(cx: Scope) -> Element {
-        rsx!(cx, div {})
-    }
-
-    fn NavEnd(cx: Scope) -> Element {
-        rsx!(cx, div {})
-    }
-
-    #[inline_props]
-    fn MainContainer<'a>(
-        cx: Scope,
-        nav: Element<'a>,
-        body: Element<'a>,
-        footer: Element<'a>,
-    ) -> Element {
-        cx.render(rsx! {
-            div {
-                class: "columns is-mobile",
-                div {
-                    class: "column is-full",
-                    nav,
-                    body,
-                    footer,
+        rsx! {
+            div { background: "{big}", height: "stretch", width: "stretch", padding: "50",
+                label { "hello" }
+                div { background: "{mid}", height: "auto", width: "stretch", padding: "{padding}",
+                    label { "World" }
+                    div { background: "{small}", height: "auto", width: "stretch", padding: "20", label { "ddddddd" } }
                 }
             }
-        })
+        }
     }
 
-    fn app(cx: Scope) -> Element {
-        let nav = cx.render(rsx! {
-            NavContainer {
-                NavMenu {}
-            }
-        });
-        let body = cx.render(rsx! {
-            div {}
-        });
-        let footer = cx.render(rsx! {
-            div {}
-        });
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .unwrap();
 
-        cx.render(rsx! {
-            MainContainer {
-                nav: nav,
-                body: body,
-                footer: footer,
-            }
-        })
-    }
+    rt.block_on(async {
+        let mut dom = VirtualDom::new(app);
+        dom.rebuild(&mut dioxus_core::NoOpMutations);
 
-    let mut dom = new_dom(app, ());
-    let _ = dom.rebuild();
-
-    for _ in 0..40 {
-        dom.handle_message(SchedulerMsg::Immediate(ScopeId(0)));
-        dom.work_with_deadline(|| false);
-        dom.handle_message(SchedulerMsg::Immediate(ScopeId(0)));
-        dom.work_with_deadline(|| false);
-        dom.handle_message(SchedulerMsg::Immediate(ScopeId(0)));
-        dom.work_with_deadline(|| false);
-
-        dom.handle_message(SchedulerMsg::Immediate(ScopeId(1)));
-        dom.work_with_deadline(|| false);
-        dom.handle_message(SchedulerMsg::Immediate(ScopeId(1)));
-        dom.work_with_deadline(|| false);
-        dom.handle_message(SchedulerMsg::Immediate(ScopeId(1)));
-        dom.work_with_deadline(|| false);
-
-        dom.handle_message(SchedulerMsg::Immediate(ScopeId(2)));
-        dom.work_with_deadline(|| false);
-        dom.handle_message(SchedulerMsg::Immediate(ScopeId(2)));
-        dom.work_with_deadline(|| false);
-        dom.handle_message(SchedulerMsg::Immediate(ScopeId(2)));
-        dom.work_with_deadline(|| false);
-
-        dom.handle_message(SchedulerMsg::Immediate(ScopeId(3)));
-        dom.work_with_deadline(|| false);
-        dom.handle_message(SchedulerMsg::Immediate(ScopeId(3)));
-        dom.work_with_deadline(|| false);
-        dom.handle_message(SchedulerMsg::Immediate(ScopeId(3)));
-        dom.work_with_deadline(|| false);
-    }
+        for _ in 0..10 {
+            dom.wait_for_work().await;
+            dom.render_immediate(&mut NoOpMutations);
+        }
+    });
 }

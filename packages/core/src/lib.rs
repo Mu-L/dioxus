@@ -1,32 +1,48 @@
-#![allow(non_snake_case)]
 #![doc = include_str!("../README.md")]
+#![doc(html_logo_url = "https://avatars.githubusercontent.com/u/79236386")]
+#![doc(html_favicon_url = "https://avatars.githubusercontent.com/u/79236386")]
+#![warn(missing_docs)]
 
-pub(crate) mod diff;
-pub(crate) mod events;
-pub(crate) mod lazynodes;
-pub(crate) mod mutations;
-pub(crate) mod nodes;
-pub(crate) mod properties;
-pub(crate) mod scopes;
-pub(crate) mod util;
-pub(crate) mod virtual_dom;
+mod any_props;
+mod arena;
+mod diff;
+mod dirty_scope;
+mod error_boundary;
+mod events;
+mod fragment;
+mod global_context;
+mod mutations;
+mod nodes;
+mod properties;
+mod runtime;
+mod scope_arena;
+mod scope_context;
+mod scopes;
+mod tasks;
+mod virtual_dom;
 
 pub(crate) mod innerlude {
+    pub(crate) use crate::any_props::*;
+    pub use crate::arena::*;
+    pub use crate::dirty_scope::*;
+    pub use crate::error_boundary::*;
     pub use crate::events::*;
-    pub use crate::lazynodes::*;
+    pub use crate::fragment::*;
+    pub use crate::global_context::*;
     pub use crate::mutations::*;
     pub use crate::nodes::*;
     pub use crate::properties::*;
+    pub use crate::runtime::{Runtime, RuntimeGuard};
     pub use crate::scopes::*;
-    pub use crate::util::*;
+    pub use crate::tasks::*;
     pub use crate::virtual_dom::*;
 
     /// An [`Element`] is a possibly-none [`VNode`] created by calling `render` on [`Scope`] or [`ScopeState`].
     ///
-    /// Any [`None`] [`Element`] will automatically be coerced into a placeholder [`VNode`] with the [`VNode::Placeholder`] variant.
-    pub type Element<'a> = Option<VNode<'a>>;
+    /// An Errored [`Element`] will propagate the error to the nearest error boundary.
+    pub type Element = Option<VNode>;
 
-    /// A [`Component`] is a function that takes a [`Scope`] and returns an [`Element`].
+    /// A [`Component`] is a function that takes [`Properties`] and returns an [`Element`].
     ///
     /// Components can be used in other components with two syntax options:
     /// - lowercase as a function call with named arguments (rust style)
@@ -35,7 +51,7 @@ pub(crate) mod innerlude {
     /// ## Rust-Style
     ///
     /// ```rust, ignore
-    /// fn example(cx: Scope<Props>) -> Element {
+    /// fn example(cx: Props) -> Element {
     ///     // ...
     /// }
     ///
@@ -43,9 +59,10 @@ pub(crate) mod innerlude {
     ///     example()
     /// )
     /// ```
+    ///
     /// ## React-Style
     /// ```rust, ignore
-    /// fn Example(cx: Scope<Props>) -> Element {
+    /// fn Example(cx: Props) -> Element {
     ///     // ...
     /// }
     ///
@@ -53,48 +70,31 @@ pub(crate) mod innerlude {
     ///     Example {}
     /// )
     /// ```
-    ///
-    /// ## As a closure
-    /// This particular type alias lets you even use static closures for pure/static components:
-    ///
-    /// ```rust, ignore
-    /// static Example: Component<Props> = |cx| {
-    ///     // ...
-    /// };
-    /// ```
-    pub type Component<P = ()> = fn(Scope<P>) -> Element;
-
-    /// A list of attributes
-    ///
-    pub type Attributes<'a> = Option<&'a [Attribute<'a>]>;
+    pub type Component<P = ()> = fn(P) -> Element;
 }
 
 pub use crate::innerlude::{
-    AnyEvent, Attribute, Component, DioxusElement, DomEdit, Element, ElementId, ElementIdIterator,
-    EventHandler, EventPriority, IntoVNode, LazyNodes, Listener, Mutations, NodeFactory,
-    Properties, SchedulerMsg, Scope, ScopeId, ScopeState, TaskId, UiEvent, UserEvent, VComponent,
-    VElement, VFragment, VNode, VPlaceholder, VText, VirtualDom,
+    fc_to_builder, generation, schedule_update, schedule_update_any, use_hook, vdom_is_rendering,
+    AnyValue, Attribute, AttributeValue, CapturedError, Component, ComponentFunction, DynamicNode,
+    Element, ElementId, Event, Fragment, HasAttributes, IntoDynNode, Mutation, Mutations,
+    NoOpMutations, Properties, RenderReturn, Runtime, ScopeId, ScopeState, Task, Template,
+    TemplateAttribute, TemplateNode, VComponent, VNode, VNodeInner, VPlaceholder, VText,
+    VirtualDom, WriteMutations,
 };
 
+/// The purpose of this module is to alleviate imports of many common types
+///
+/// This includes types like [`Element`], and [`Component`].
 pub mod prelude {
     pub use crate::innerlude::{
-        fc_to_builder, Attributes, Component, DioxusElement, Element, EventHandler, Fragment,
-        LazyNodes, NodeFactory, Properties, Scope, ScopeState, VNode, VirtualDom,
+        consume_context, consume_context_from_scope, current_scope_id, fc_to_builder, flush_sync,
+        generation, has_context, needs_update, needs_update_any, parent_scope, provide_context,
+        provide_root_context, remove_future, schedule_update, schedule_update_any, spawn,
+        spawn_forever, suspend, try_consume_context, use_after_render, use_before_render, use_drop,
+        use_error_boundary, use_hook, use_hook_with_cleanup, AnyValue, Attribute, Component,
+        ComponentFunction, Element, ErrorBoundary, Event, EventHandler, Fragment, HasAttributes,
+        IntoAttributeValue, IntoDynNode, OptionStringFromMarker, Properties, Runtime, RuntimeGuard,
+        ScopeId, ScopeState, SuperFrom, SuperInto, Task, Template, TemplateAttribute, TemplateNode,
+        Throw, VNode, VNodeInner, VirtualDom,
     };
-}
-
-pub mod exports {
-    //! Important dependencies that are used by the rest of the library
-    //! Feel free to just add the dependencies in your own Crates.toml
-    pub use bumpalo;
-    pub use futures_channel;
-}
-
-/// Functions that wrap unsafe functionality to prevent us from misusing it at the callsite
-pub(crate) mod unsafe_utils {
-    use crate::VNode;
-
-    pub(crate) unsafe fn extend_vnode<'a, 'b>(node: &'a VNode<'a>) -> &'b VNode<'b> {
-        std::mem::transmute(node)
-    }
 }

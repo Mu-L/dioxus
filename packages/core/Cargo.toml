@@ -1,68 +1,33 @@
 [package]
 name = "dioxus-core"
-version = "0.1.9"
+version = { workspace = true }
 authors = ["Jonathan Kelley"]
-edition = "2018"
+edition = "2021"
 description = "Core functionality for Dioxus - a concurrent renderer-agnostic Virtual DOM for interactive user experiences"
-license = "MIT/Apache-2.0"
+license = "MIT OR Apache-2.0"
 repository = "https://github.com/DioxusLabs/dioxus/"
 homepage = "https://dioxuslabs.com"
-documentation = "https://dioxuslabs.com"
-keywords = ["dom", "ui", "gui", "react", "wasm"]
-
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+keywords = ["dom", "ui", "gui", "react"]
 
 [dependencies]
-# Bumpalo is used as a micro heap backing each component
-bumpalo = { version = "3.6", features = ["collections", "boxed"] }
-
-# faster hashmaps
-fxhash = "0.2"
-
-# Used in diffing
+rustc-hash = { workspace = true }
 longest-increasing-subsequence = "0.1.0"
-
-# internall used
-log = { version = "0.4", features = ["release_max_level_off"] }
-
-futures-util = { version = "0.3", default-features = false }
-
-smallvec = "1.6"
-
-slab = "0.4"
-
-futures-channel = "0.3"
-
-# used for noderefs
-once_cell = "1.8"
-
-indexmap = "1.7"
-
-# Serialize the Edits for use in Webview/Liveview instances
+futures-util = { workspace = true, default-features = false, features = [
+    "alloc",
+    "std",
+] }
+slab = { workspace = true }
+futures-channel = { workspace = true }
+tracing = { workspace = true }
 serde = { version = "1", features = ["derive"], optional = true }
 
-# todo: I want to get rid of this
-backtrace = "0.3"
-
 [dev-dependencies]
-anyhow = "1.0.42"
-fern = { version = "0.6.0", features = ["colored"] }
-rand = { version = "0.8.4", features = ["small_rng"] }
-dioxus-core-macro = { path = "../core-macro", version ="^0.1.6"}
-criterion = "0.3.5"
-thiserror = "1.0.30"
-dioxus-html = { path = "../html" }
+tokio = { workspace = true, features = ["full"] }
+dioxus = { workspace = true }
+pretty_assertions = "1.3.0"
+rand = "0.8.5"
+dioxus-ssr = { workspace = true }
 
 [features]
 default = []
 serialize = ["serde"]
-debug_vdom = []
-
-[[bench]]
-name = "create"
-harness = false
-
-[[bench]]
-name = "jsframework"
-harness = false

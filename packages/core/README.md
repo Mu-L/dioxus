@@ -1,98 +1,93 @@
-# Dioxus-core
+# dioxus-core
 
-This is the core crate for the Dioxus Virtual DOM. This README will focus on the technical design and layout of this Virtual DOM implementation. If you want to read more about using Dioxus, then check out the Dioxus crate, documentation, and website.
-
-To build new apps with Dioxus or to extend the ecosystem with new hooks or components, use the higher-level `dioxus` crate with the appropriate feature flags.
-
+`dioxus-core` provides a fast and featureful VirtualDom implementation for Rust.
 
 ```rust, ignore
-fn app(cx: Scope) -> Element {
-    rsx!(cx, div { "hello world" })
+use dioxus_core::prelude::*;
+
+let vdom = VirtualDom::new(app);
+let real_dom = SomeRenderer::new();
+
+loop {
+    select! {
+        evt = real_dom.event() => vdom.handle_event(evt),
+        _ = vdom.wait_for_work() => {}
+    }
+    vdom.render(&mut real_dom)
+}
+
+# fn app() -> Element { None }
+# struct SomeRenderer; impl SomeRenderer { fn new() -> SomeRenderer { SomeRenderer; } async fn event() -> () { unimplemented!() } }
+```
+
+## Features
+
+A virtualdom is an efficient and flexible tree datastructure that allows you to manage state for a graphical user interface. The Dioxus VirtualDom is perhaps the most fully-featured virtualdom implementation in Rust and powers renderers running across Web, Desktop, Mobile, SSR, TUI, LiveView, and more. When you use the Dioxus VirtualDom, you immediately enable users of your renderer to leverage the wide ecosystem of Dioxus components, hooks, and associated tooling.
+
+Some features of `dioxus-core` include:
+
+- UI components are just functions
+- State is provided by hooks
+- Deep integration with async
+- Strong focus on performance
+- Integrated hotreloading support
+- Extensible system for UI elements and their attributes
+
+If you are just starting, check out the Guides first.
+
+## Understanding the implementation
+
+`dioxus-core` is designed to be a lightweight crate that. It exposes a number of flexible primitives without being deeply concerned about the intracices of state management itself. We proivde a number of useful abstractions built on these primitives in the `dioxus-hooks` crate as well as the `dioxus-signals` crate.
+
+The important abstractions to understand are:
+- The [`VirtualDom`]
+- The [`Component`] and its [`Properties`]
+- Handling events
+- Working with async
+- Suspense
+
+## Usage
+
+The `dioxus` crate exports the `rsx` macro which transforms a helpful, simpler syntax of Rust.
+
+First, start with your app:
+
+```rust
+# use dioxus::dioxus_core::Mutations;
+use dioxus::prelude::*;
+
+// First, declare a root component
+fn app() -> Element {
+    rsx!{
+        div { "hello world" }
+    }
 }
 
 fn main() {
-    let mut renderer = SomeRenderer::new();
-
-    // Creating a new virtualdom from a component
+    // Next, create a new VirtualDom using this app as the root component.
     let mut dom = VirtualDom::new(app);
 
-    // Patching the renderer with the changes to draw the screen
-    let edits = dom.rebuild();
-    renderer.apply(edits);
-
-    // Injecting events
-    dom.handle_message(SchedulerMsg::Event(UserEvent {
-        scope_id: None,
-        priority: EventPriority::High,
-        element: ElementId(0),
-        name: "onclick",
-        data: Arc::new(()),
-    }));
-
-    // polling asynchronously
-    dom.wait_for_work().await;
-
-    // working with a deadline
-    if let Some(edits) = dom.work_with_deadline(|| false) {
-        renderer.apply(edits);
-    }
-
-    // getting state of scopes
-    let scope = dom.get_scope(ScopeId(0)).unwrap();
-
-    // iterating through the tree
-    match scope.root_node() {
-        VNodes::Text(vtext) => dbg!(vtext),
-        VNodes::Element(vel) => dbg!(vel),
-        _ => todo!()
-    }
+    // The initial render of the dom will generate a stream of edits for the real dom to apply
+    let mutations = dom.rebuild_to_vec();
 }
 ```
 
-## Internals
-
-Dioxus-core builds off the many frameworks that came before it. Notably, Dioxus borrows these concepts:
-
-- React: hooks, concurrency, suspense
-- Dodrio: bump allocation, double buffering, and some diffing architecture
-
-Dioxus-core leverages some really cool techniques and hits a very high level of parity with mature frameworks. However, Dioxus also brings some new unique features:
-
-- managed lifetimes for borrowed data
-- placeholder approach for suspended vnodes
-- fiber/interruptible diffing algorithm
-- custom memory allocator for vnodes and all text content
-- support for fragments w/ lazy normalization
-- slab allocator for scopes
-- mirrored-slab approach for remote vdoms
-- dedicated subtrees for rendering into separate contexts from the same app
-
-There's certainly more to the story, but these optimizations make Dioxus memory use and allocation count extremely minimal. For an average application, it is possible that zero allocations will need to be performed once the app has been loaded. Only when new components are added to the dom will allocations occur. For a given component, the space of old VNodes is dynamically recycled as new nodes are added. Additionally, Dioxus tracks the average memory footprint of previous components to estimate how much memory allocate for future components.
-
-All in all, Dioxus treats memory as a valuable resource. Combined with the memory-efficient footprint of Wasm compilation, Dioxus apps can scale to thousands of components and still stay snappy.
-
-## Goals
-
-The final implementation of Dioxus must:
-
-- Be **fast**. Allocators are typically slow in Wasm/Rust, so we should have a smart way of allocating.
-- Be memory efficient. Servers should handle tens of thousands of simultaneous VDoms with no problem.
-- Be concurrent. Components should be able to pause rendering to let the screen paint the next frame.
-- Be disconnected from a specific renderer (no WebSys dependency in the core crate).
-- Support server-side-rendering (SSR). VNodes should render to a string that can be served via a web server.
-- Be "live". Components should be able to be both server rendered and client rendered without needing frontend APIs.
-- Be modular. Components and hooks should be work anywhere without worrying about target platform.
+## Contributing
+- Check out the website [section on contributing](https://dioxuslabs.com/learn/0.4/contributing).
+- Report issues on our [issue tracker](https://github.com/dioxuslabs/dioxus/issues).
+- [Join](https://discord.gg/XgGxMSkvUM) the discord and ask questions!
 
 
-## Safety
+<a href="https://github.com/dioxuslabs/dioxus/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=dioxuslabs/dioxus&max=30&columns=10" />
+</a>
 
-Dioxus uses unsafe. The design of Dioxus *requires* unsafe (self-referential trees).
 
-All of our test suite passes MIRI without errors.
+## License
+This project is licensed under the [MIT license].
 
-Dioxus deals with arenas, lifetimes, asynchronous tasks, custom allocators, pinning, and a lot more foundational low-level work that is very difficult to implement with 0 unsafe.
+[mit license]: https://github.com/DioxusLabs/dioxus/blob/master/LICENSE-MIT
 
-If you don't want to use a crate that uses unsafe, then this crate is not for you.
-
-However, we are always interested in decreasing the scope of the core VirtualDom to make it easier to review. We'd be happy to welcome PRs that can eliminate unsafe code while still upholding the numerous invariants required to execute certain features.
-
+Unless you explicitly state otherwise, any contribution intentionally submitted
+for inclusion in Dioxus by you, shall be licensed as MIT, without any additional
+terms or conditions.

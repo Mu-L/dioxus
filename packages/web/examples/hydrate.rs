@@ -1,55 +1,47 @@
-use dioxus_core::prelude::*;
-use dioxus_core_macro::*;
-use dioxus_html as dioxus_elements;
+use dioxus::prelude::*;
+use dioxus_web::Config;
 use web_sys::window;
 
-fn app(cx: Scope) -> Element {
-    cx.render(rsx! {
+fn app() -> Element {
+    rsx! {
+        div { h1 { "thing 1" } }
+        div { h2 { "thing 2" } }
         div {
-            h1 { "thing 1" }
-        }
-        div {
-            h2 { "thing 2"}
-        }
-        div {
-            h2 { "thing 2"}
+            h2 { "thing 2" }
             "asd"
             "asd"
-            bapp()
+            Bapp {}
         }
-        (0..10).map(|f| rsx!{
+        {(0..10).map(|f| rsx!{
             div {
                 "thing {f}"
             }
-        })
-    })
+        })}
+    }
 }
 
-fn bapp(cx: Scope) -> Element {
-    cx.render(rsx! {
+#[allow(non_snake_case)]
+fn Bapp() -> Element {
+    rsx! {
+        div { h1 { "thing 1" } }
+        div { h2 { "thing 2" } }
         div {
-            h1 { "thing 1" }
-        }
-        div {
-            h2 { "thing 2"}
-        }
-        div {
-            h2 { "thing 2"}
+            h2 { "thing 2" }
             "asd"
             "asd"
         }
-    })
+    }
 }
 
 fn main() {
     console_error_panic_hook::set_once();
-    wasm_logger::init(wasm_logger::Config::new(log::Level::Trace));
+    tracing_wasm::set_as_global_default();
 
     let mut dom = VirtualDom::new(app);
-    let _ = dom.rebuild();
+    dom.rebuild(&mut dioxus_core::NoOpMutations);
 
-    let pre = dioxus_ssr::pre_render_vdom(&dom);
-    log::debug!("{}", pre);
+    let pre = dioxus_ssr::pre_render(&dom);
+    tracing::trace!("{}", pre);
 
     // set the inner content of main to the pre-rendered content
     window()
@@ -60,6 +52,6 @@ fn main() {
         .unwrap()
         .set_inner_html(&pre);
 
-    // now rehydtrate
-    dioxus_web::launch_with_props(app, (), |c| c.hydrate(true));
+    // now rehydrate
+    dioxus_web::launch::launch(app, vec![], Config::new().hydrate(true));
 }

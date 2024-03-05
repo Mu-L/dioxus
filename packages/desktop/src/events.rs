@@ -1,195 +1,148 @@
-//! Convert a serialized event to an event Trigger
-//!
+//! Convert a serialized event to an event trigger
 
-use std::any::Any;
-use std::sync::Arc;
+use crate::element::DesktopElement;
+use dioxus_html::*;
 
-use dioxus_core::{ElementId, EventPriority, UserEvent};
-use dioxus_html::on::*;
+pub(crate) struct SerializedHtmlEventConverter;
 
-#[derive(serde::Serialize, serde::Deserialize)]
-struct ImEvent {
-    event: String,
-    mounted_dom_id: u64,
-    // scope: u64,
-    contents: serde_json::Value,
-}
-
-pub fn trigger_from_serialized(val: serde_json::Value) -> UserEvent {
-    let ims: Vec<ImEvent> = serde_json::from_value(val).unwrap();
-
-    let ImEvent {
-        event,
-        mounted_dom_id,
-        contents,
-    } = ims.into_iter().next().unwrap();
-
-    // let scope_id = ScopeId(scope as usize);
-    let mounted_dom_id = Some(ElementId(mounted_dom_id as usize));
-
-    let name = event_name_from_typ(&event);
-    let event = make_synthetic_event(&event, contents);
-
-    UserEvent {
-        name,
-        priority: EventPriority::Low,
-        scope_id: None,
-        element: mounted_dom_id,
-        data: event,
+impl HtmlEventConverter for SerializedHtmlEventConverter {
+    fn convert_animation_data(&self, event: &PlatformEventData) -> AnimationData {
+        event
+            .downcast::<SerializedAnimationData>()
+            .cloned()
+            .unwrap()
+            .into()
     }
-}
 
-fn make_synthetic_event(name: &str, val: serde_json::Value) -> Arc<dyn Any + Send + Sync> {
-    match name {
-        "copy" | "cut" | "paste" => {
-            //
-            Arc::new(ClipboardData {})
-        }
-        "compositionend" | "compositionstart" | "compositionupdate" => {
-            Arc::new(serde_json::from_value::<CompositionData>(val).unwrap())
-        }
-        "keydown" | "keypress" | "keyup" => {
-            let evt = serde_json::from_value::<KeyboardData>(val).unwrap();
-            Arc::new(evt)
-        }
-        "focus" | "blur" | "focusout" | "focusin" => {
-            //
-            Arc::new(FocusData {})
-        }
-
-        // todo: these handlers might get really slow if the input box gets large and allocation pressure is heavy
-        // don't have a good solution with the serialized event problem
-        "change" | "input" | "invalid" | "reset" | "submit" => {
-            Arc::new(serde_json::from_value::<FormData>(val).unwrap())
-        }
-
-        "click" | "contextmenu" | "doubleclick" | "drag" | "dragend" | "dragenter" | "dragexit"
-        | "dragleave" | "dragover" | "dragstart" | "drop" | "mousedown" | "mouseenter"
-        | "mouseleave" | "mousemove" | "mouseout" | "mouseover" | "mouseup" => {
-            Arc::new(serde_json::from_value::<MouseData>(val).unwrap())
-        }
-        "pointerdown" | "pointermove" | "pointerup" | "pointercancel" | "gotpointercapture"
-        | "lostpointercapture" | "pointerenter" | "pointerleave" | "pointerover" | "pointerout" => {
-            Arc::new(serde_json::from_value::<PointerData>(val).unwrap())
-        }
-        "select" => {
-            //
-            Arc::new(serde_json::from_value::<SelectionData>(val).unwrap())
-        }
-
-        "touchcancel" | "touchend" | "touchmove" | "touchstart" => {
-            Arc::new(serde_json::from_value::<TouchData>(val).unwrap())
-        }
-
-        "scroll" => Arc::new(()),
-
-        "wheel" => Arc::new(serde_json::from_value::<WheelData>(val).unwrap()),
-
-        "animationstart" | "animationend" | "animationiteration" => {
-            Arc::new(serde_json::from_value::<AnimationData>(val).unwrap())
-        }
-
-        "transitionend" => Arc::new(serde_json::from_value::<TransitionData>(val).unwrap()),
-
-        "abort" | "canplay" | "canplaythrough" | "durationchange" | "emptied" | "encrypted"
-        | "ended" | "error" | "loadeddata" | "loadedmetadata" | "loadstart" | "pause" | "play"
-        | "playing" | "progress" | "ratechange" | "seeked" | "seeking" | "stalled" | "suspend"
-        | "timeupdate" | "volumechange" | "waiting" => {
-            //
-            Arc::new(MediaData {})
-        }
-
-        "toggle" => Arc::new(ToggleData {}),
-
-        _ => Arc::new(()),
+    fn convert_clipboard_data(&self, event: &PlatformEventData) -> ClipboardData {
+        event
+            .downcast::<SerializedClipboardData>()
+            .cloned()
+            .unwrap()
+            .into()
     }
-}
 
-fn event_name_from_typ(typ: &str) -> &'static str {
-    match typ {
-        "copy" => "copy",
-        "cut" => "cut",
-        "paste" => "paste",
-        "compositionend" => "compositionend",
-        "compositionstart" => "compositionstart",
-        "compositionupdate" => "compositionupdate",
-        "keydown" => "keydown",
-        "keypress" => "keypress",
-        "keyup" => "keyup",
-        "focus" => "focus",
-        "focusout" => "focusout",
-        "focusin" => "focusin",
-        "blur" => "blur",
-        "change" => "change",
-        "input" => "input",
-        "invalid" => "invalid",
-        "reset" => "reset",
-        "submit" => "submit",
-        "click" => "click",
-        "contextmenu" => "contextmenu",
-        "doubleclick" => "doubleclick",
-        "drag" => "drag",
-        "dragend" => "dragend",
-        "dragenter" => "dragenter",
-        "dragexit" => "dragexit",
-        "dragleave" => "dragleave",
-        "dragover" => "dragover",
-        "dragstart" => "dragstart",
-        "drop" => "drop",
-        "mousedown" => "mousedown",
-        "mouseenter" => "mouseenter",
-        "mouseleave" => "mouseleave",
-        "mousemove" => "mousemove",
-        "mouseout" => "mouseout",
-        "mouseover" => "mouseover",
-        "mouseup" => "mouseup",
-        "pointerdown" => "pointerdown",
-        "pointermove" => "pointermove",
-        "pointerup" => "pointerup",
-        "pointercancel" => "pointercancel",
-        "gotpointercapture" => "gotpointercapture",
-        "lostpointercapture" => "lostpointercapture",
-        "pointerenter" => "pointerenter",
-        "pointerleave" => "pointerleave",
-        "pointerover" => "pointerover",
-        "pointerout" => "pointerout",
-        "select" => "select",
-        "touchcancel" => "touchcancel",
-        "touchend" => "touchend",
-        "touchmove" => "touchmove",
-        "touchstart" => "touchstart",
-        "scroll" => "scroll",
-        "wheel" => "wheel",
-        "animationstart" => "animationstart",
-        "animationend" => "animationend",
-        "animationiteration" => "animationiteration",
-        "transitionend" => "transitionend",
-        "abort" => "abort",
-        "canplay" => "canplay",
-        "canplaythrough" => "canplaythrough",
-        "durationchange" => "durationchange",
-        "emptied" => "emptied",
-        "encrypted" => "encrypted",
-        "ended" => "ended",
-        "error" => "error",
-        "loadeddata" => "loadeddata",
-        "loadedmetadata" => "loadedmetadata",
-        "loadstart" => "loadstart",
-        "pause" => "pause",
-        "play" => "play",
-        "playing" => "playing",
-        "progress" => "progress",
-        "ratechange" => "ratechange",
-        "seeked" => "seeked",
-        "seeking" => "seeking",
-        "stalled" => "stalled",
-        "suspend" => "suspend",
-        "timeupdate" => "timeupdate",
-        "volumechange" => "volumechange",
-        "waiting" => "waiting",
-        "toggle" => "toggle",
-        _ => {
-            panic!("unsupported event type")
-        }
+    fn convert_composition_data(&self, event: &PlatformEventData) -> CompositionData {
+        event
+            .downcast::<SerializedCompositionData>()
+            .cloned()
+            .unwrap()
+            .into()
+    }
+
+    fn convert_drag_data(&self, event: &PlatformEventData) -> DragData {
+        event
+            .downcast::<SerializedDragData>()
+            .cloned()
+            .unwrap()
+            .into()
+    }
+
+    fn convert_focus_data(&self, event: &PlatformEventData) -> FocusData {
+        event
+            .downcast::<SerializedFocusData>()
+            .cloned()
+            .unwrap()
+            .into()
+    }
+
+    fn convert_form_data(&self, event: &PlatformEventData) -> FormData {
+        event
+            .downcast::<SerializedFormData>()
+            .cloned()
+            .unwrap()
+            .into()
+    }
+
+    fn convert_image_data(&self, event: &PlatformEventData) -> ImageData {
+        event
+            .downcast::<SerializedImageData>()
+            .cloned()
+            .unwrap()
+            .into()
+    }
+
+    fn convert_keyboard_data(&self, event: &PlatformEventData) -> KeyboardData {
+        event
+            .downcast::<SerializedKeyboardData>()
+            .cloned()
+            .unwrap()
+            .into()
+    }
+
+    fn convert_media_data(&self, event: &PlatformEventData) -> MediaData {
+        event
+            .downcast::<SerializedMediaData>()
+            .cloned()
+            .unwrap()
+            .into()
+    }
+
+    fn convert_mounted_data(&self, event: &PlatformEventData) -> MountedData {
+        event.downcast::<DesktopElement>().cloned().unwrap().into()
+    }
+
+    fn convert_mouse_data(&self, event: &PlatformEventData) -> MouseData {
+        event
+            .downcast::<SerializedMouseData>()
+            .cloned()
+            .unwrap()
+            .into()
+    }
+
+    fn convert_pointer_data(&self, event: &PlatformEventData) -> PointerData {
+        event
+            .downcast::<SerializedPointerData>()
+            .cloned()
+            .unwrap()
+            .into()
+    }
+
+    fn convert_scroll_data(&self, event: &PlatformEventData) -> ScrollData {
+        event
+            .downcast::<SerializedScrollData>()
+            .cloned()
+            .unwrap()
+            .into()
+    }
+
+    fn convert_selection_data(&self, event: &PlatformEventData) -> SelectionData {
+        event
+            .downcast::<SerializedSelectionData>()
+            .cloned()
+            .unwrap()
+            .into()
+    }
+
+    fn convert_toggle_data(&self, event: &PlatformEventData) -> ToggleData {
+        event
+            .downcast::<SerializedToggleData>()
+            .cloned()
+            .unwrap()
+            .into()
+    }
+
+    fn convert_touch_data(&self, event: &PlatformEventData) -> TouchData {
+        event
+            .downcast::<SerializedTouchData>()
+            .cloned()
+            .unwrap()
+            .into()
+    }
+
+    fn convert_transition_data(&self, event: &PlatformEventData) -> TransitionData {
+        event
+            .downcast::<SerializedTransitionData>()
+            .cloned()
+            .unwrap()
+            .into()
+    }
+
+    fn convert_wheel_data(&self, event: &PlatformEventData) -> WheelData {
+        event
+            .downcast::<SerializedWheelData>()
+            .cloned()
+            .unwrap()
+            .into()
     }
 }

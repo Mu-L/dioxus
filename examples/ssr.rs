@@ -1,21 +1,21 @@
 //! Example: SSR
 //!
 //! This example shows how we can render the Dioxus Virtualdom using SSR.
-
-use std::fmt::Write;
+//! Dioxus' SSR is quite comprehensive and can generate a number of utility markers for things like hydration.
+//!
+//! You can also render without any markers to get a clean HTML output.
 
 use dioxus::prelude::*;
 
 fn main() {
     // We can render VirtualDoms
-    let mut vdom = VirtualDom::new(app);
-    let _ = vdom.rebuild();
-    println!("{}", dioxus::ssr::render_vdom(&vdom));
+    let vdom = VirtualDom::prebuilt(app);
+    println!("{}", dioxus_ssr::render(&vdom));
 
     // Or we can render rsx! calls themselves
     println!(
         "{}",
-        dioxus::ssr::render_lazy(rsx! {
+        dioxus_ssr::render_element(rsx! {
             div {
                 h1 { "Hello, world!" }
             }
@@ -23,25 +23,20 @@ fn main() {
     );
 
     // We can configure the SSR rendering to add ids for rehydration
-    println!(
-        "{}",
-        dioxus::ssr::render_vdom_cfg(&vdom, |c| c.pre_render(true))
-    );
+    println!("{}", dioxus_ssr::pre_render(&vdom));
 
-    // We can even render as a writer
+    // We can render to a buf directly too
     let mut file = String::new();
-    let _ = file.write_fmt(format_args!(
-        "{}",
-        dioxus::ssr::TextRenderer::from_vdom(&vdom, Default::default())
-    ));
-    println!("{}", file);
+    let mut renderer = dioxus_ssr::Renderer::default();
+    renderer.render_to(&mut file, &vdom).unwrap();
+    println!("{file}");
 }
 
-fn app(cx: Scope) -> Element {
-    cx.render(rsx!(
+fn app() -> Element {
+    rsx!(
         div {
             h1 { "Title" }
             p { "Body" }
         }
-    ))
+    )
 }

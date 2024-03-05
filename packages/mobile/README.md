@@ -1,11 +1,29 @@
-# Getting started: mobile
+# Dioxus Mobile
 
+[![Crates.io][crates-badge]][crates-url]
+[![MIT licensed][mit-badge]][mit-url]
+[![Build Status][actions-badge]][actions-url]
+[![Discord chat][discord-badge]][discord-url]
 
-Dioxus is unique in that it actually supports mobile. However, support is very young and you might need to dip down into some of the primitives until better supported is ready.
+[crates-badge]: https://img.shields.io/crates/v/dioxus-mobile.svg
+[crates-url]: https://crates.io/crates/dioxus-mobile
+[mit-badge]: https://img.shields.io/badge/license-MIT-blue.svg
+[mit-url]: https://github.com/dioxuslabs/dioxus/blob/master/LICENSE
+[actions-badge]: https://github.com/dioxuslabs/dioxus/actions/workflows/main.yml/badge.svg
+[actions-url]: https://github.com/dioxuslabs/dioxus/actions?query=workflow%3ACI+branch%3Amaster
+[discord-badge]: https://img.shields.io/discord/899851952891002890.svg?logo=discord&style=flat-square
+[discord-url]: https://discord.gg/XgGxMSkvUM
 
-Currently, only iOS is supported through us, however you *can* add android support by following the same instructions below, but using the `android` guide in `cargo-mobile`.
+[Website](https://dioxuslabs.com) |
+[Guides](https://dioxuslabs.com/learn/0.4/) |
+[API Docs](https://docs.rs/dioxus-mobile/latest/dioxus_mobile) |
+[Chat](https://discord.gg/XgGxMSkvUM)
 
-Also, Dioxus Desktop and Dioxus Mobile share the same codebase, and dioxus-mobile currently just re-exports dioxus-desktop.
+## Overview
+
+`dioxus-mobile` is a re-export of `dioxus-desktop` with some minor tweaks and documentation changes. As this crate evolves, it will provide some more unique features to mobile, but for now, it's very similar to the desktop crate.
+
+Dioxus Mobile supports both iOS and Android. However, Android support is still quite experimental and requires a lot of configuration. A good area to contribute here would be to improve the CLI tool to include bundling and mobile configuration.
 
 ## Getting Set up
 
@@ -16,7 +34,6 @@ We're going to be using `cargo-mobile` to build for mobile. First, install it:
 ```shell
 $ cargo install --git https://github.com/BrainiumLLC/cargo-mobile
 ```
-
 
 And then initialize your app for the right platform. Use the `winit` template for now. Right now, there's no "Dioxus" template in cargo-mobile.
 
@@ -32,7 +49,7 @@ We're going to completely clear out the `dependencies` it generates for us, swap
 name = "dioxus-ios-demo"
 version = "0.1.0"
 authors = ["Jonathan Kelley <jkelleyrtp@gmail.com>"]
-edition = "2018"
+edition = "2021"
 
 
 # leave the `lib` declaration
@@ -59,11 +76,11 @@ Edit your `lib.rs`:
 use dioxus::prelude::*;
 
 fn main() {
-    dioxus::mobile::launch(app);
+    dioxus_mobile::launch(app);
 }
 
-fn app(cx: Scope) -> Element {
-    cx.render(rsx!{
+fn app() -> Element {
+    rsx!{
         div {
             "hello world!"
         }
@@ -71,8 +88,23 @@ fn app(cx: Scope) -> Element {
 }
 ```
 
-To configure the webview, menubar, and other important desktop-specific features, checkout out some of the launch configuration in the [API reference](https://docs.rs/dioxus-mobile/).
+To configure the web view, menubar, and other important desktop-specific features, checkout out some of the launch configurations in the [API reference](https://docs.rs/dioxus-mobile/).
 
 ## Future Steps
 
-Make sure to read the [Dioxus Guide](https://dioxuslabs.com/guide) if you already haven't!
+Make sure to read the [Dioxus Guide](https://dioxuslabs.com/learn/0.4/) if you already haven't!
+
+## Contributing
+
+- Report issues on our [issue tracker](https://github.com/dioxuslabs/dioxus/issues).
+- Join the discord and ask questions!
+
+## License
+
+This project is licensed under the [MIT license].
+
+[mit license]: https://github.com/DioxusLabs/dioxus/blob/master/LICENSE-MIT
+
+Unless you explicitly state otherwise, any contribution intentionally submitted
+for inclusion in Dioxus by you shall be licensed as MIT without any additional
+terms or conditions.
